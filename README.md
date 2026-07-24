@@ -2,6 +2,8 @@
 
 A full-featured tactical strategy builder for Rainbow Six Siege, inspired by Stratforge.gg and r6strat.com.
 
+<a href="https://www.buymeacoffee.com/zCrxticxl"><img src="https://img.buymeacoffee.com/button-api/?text=donation for the work :)&emoji=&slug=zCrxticxl&button_colour=FF5F5F&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" /></a>
+
 ## Features
 - 🗺️ **Map Editor** — Draw arrows, routes, zones, and text on the competitive map pool
 - 👤 **Operator Placement** — All R6 operators with icons from the community r6operators library

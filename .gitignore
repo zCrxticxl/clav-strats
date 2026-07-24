@@ -1,0 +1,20 @@
+# dependencies
+/node_modules
+
+# production builds
+/build
+/dist
+
+# tauri / rust
+/src-tauri/target
+/src-tauri/gen
+
+# signing keys — NEVER commit these
+*.key
+.tauri/
+
+# misc
+.env.local
+.DS_Store
+*.log
+npm-debug.log*

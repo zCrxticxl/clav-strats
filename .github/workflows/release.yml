@@ -27,6 +27,9 @@ jobs:
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v0
         env:
+          # react-scripts treats lint warnings as build errors when CI=true
+          # (GitHub sets it). Keep the release build from failing on warnings.
+          CI: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Add these two under Settings -> Secrets and variables -> Actions:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

@@ -323,6 +323,16 @@ body {
   color: var(--accent-gold);
 }
 
+.btn-coffee {
+  border-color: #ff5f5f;
+  color: #ff8080;
+}
+.btn-coffee:hover {
+  border-color: #ff5f5f;
+  color: #fff;
+  background: #ff5f5f;
+}
+
 .maps-section {
   padding: 48px;
 }

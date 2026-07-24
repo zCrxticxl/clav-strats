@@ -112,6 +112,7 @@ export default function HomePage() {
             + New Strat
           </Link>
           <Link to="/library" className="btn-secondary">📂 Library</Link>
+          <a href="https://www.buymeacoffee.com/zCrxticxl" target="_blank" rel="noreferrer" className="btn-secondary btn-coffee" title="Support development">☕ Support</a>
         </div>
       </section>
 

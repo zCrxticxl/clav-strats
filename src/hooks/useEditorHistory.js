@@ -80,7 +80,7 @@ export function useEditorHistory(initial = []) {
     setStateInternal(prev => (typeof updater === 'function' ? updater(prev) : updater));
     bump();
   }, [bump]);
-  
+
   // suppress unused warning — tick is only read to trigger re-renders
   void tick;
 

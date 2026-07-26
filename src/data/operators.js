@@ -77,7 +77,7 @@ export const DEFENDERS = [
   { id: 'solis',        name: 'Solis',       role: 'Intel',         icon: ICON('solis'),        gadget: null,                     secondaries: sec('impact_grenade','bp_camera') },
   { id: 'fenrir',       name: 'Fenrir',      role: 'Trap',          icon: ICON('fenrir'),       gadget: GADGETS.fenrir_dread,     secondaries: sec('barbed_wire','bp_camera') },
   { id: 'tubarao',      name: 'Tubarão',     role: 'Trap',          icon: ICON('tubarao'),      gadget: GADGETS.tubarao_zoto,     secondaries: sec('nitro_cell','proximity_mine') },
-  { id: 'deadbolt',     name: 'Deadbolt',    role: 'Roam',          icon: ICON('deadbolt'),     gadget: null,                     secondaries: sec('barbed_wire','impact_grenade') },
+  { id: 'denari',       name: 'Denari',      role: 'Area Denial',   icon: ICON('denari'),       gadget: GADGETS.trip_wire,        secondaries: sec('observation_blocker','deploy_shield') },
   { id: 'mira',         name: 'Mira',        role: 'Intel',         icon: ICON('mira'),         gadget: GADGETS.mira_mirror,      secondaries: sec('nitro_cell','proximity_mine') },
   { id: 'lesion',       name: 'Lesion',      role: 'Trap',          icon: ICON('lesion'),       gadget: GADGETS.lesion_gu,        secondaries: sec('bp_camera','impact_grenade') },
   { id: 'kaid',         name: 'Kaid',        role: 'Intel Denial',  icon: ICON('kaid'),         gadget: GADGETS.kaid_electro,     secondaries: sec('nitro_cell','barbed_wire') },

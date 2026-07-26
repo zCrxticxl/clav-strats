@@ -1,3 +1,5 @@
+import { ATTACHED_GADGET_GAP, ATTACHED_GADGET_SIZE } from './gadgetPlacement';
+
 // PNG export — all canvas-drawn images use crossOrigin='anonymous' and their
 // hosts send Access-Control-Allow-Origin, so the canvas stays untainted even
 // with Electron webSecurity enabled.
@@ -69,7 +71,7 @@ async function drawOperatorsOnCanvas(ctx, elements, W, H, scale) {
 
 function pct(v, dim) { return (v / 100) * dim; }
 
-function buildFloorSVG(W, H, elements) {
+export function buildFloorSVG(W, H, elements) {
   const els = elements.map((el, i) => {
     const key = `el-${i}`;
     const c = el.color || '#E8B84B';
@@ -105,14 +107,33 @@ function buildFloorSVG(W, H, elements) {
       return ''; // drawn directly on canvas via drawOperatorsOnCanvas
     }
     if (el.type === 'gadget' && el.gadget?.icon) {
-      const gs = 3.4 * (el.scale || 1);
-      const pad = gs * 0.1;
+      const attached = el.wallId && el.anchorX != null && el.anchorY != null;
+      const gs = (attached ? ATTACHED_GADGET_SIZE : 3.4) * (el.scale || 1);
+      const pad = attached ? gs * 0.04 : gs * 0.1;
       const rot = el.rotation || 0;
-      const box = `<rect x="${el.x - gs/2}%" y="${el.y - gs/2}%" width="${gs}%" height="${gs}%" fill="rgba(8,10,14,0.85)" stroke="${c}" stroke-width="0.25%" rx="0.6"/>`;
-      const img = `<image href="${el.gadget.icon}" x="${el.x - gs/2 + pad}%" y="${el.y - gs/2 + pad}%" width="${gs - pad*2}%" height="${gs - pad*2}%"/>`;
-      return rot
-        ? `<g style="transform:rotate(${rot}deg);transform-box:fill-box;transform-origin:50% 50%">${box}${img}</g>`
-        : `${box}${img}`;
+      let gx = el.x, gy = el.y;
+      if (attached) {
+        const dx = el.x - el.anchorX, dy = el.y - el.anchorY;
+        const distance = Math.hypot(dx, dy);
+        const readableDistance = gs / 2 + ATTACHED_GADGET_GAP + 0.35;
+        if (distance > 0 && distance < readableDistance) {
+          gx = el.anchorX + dx / distance * readableDistance;
+          gy = el.anchorY + dy / distance * readableDistance;
+        }
+      }
+      const attachment = attached
+        ? `<line x1="${el.anchorX}%" y1="${el.anchorY}%" x2="${gx}%" y2="${gy}%" stroke="${c}" stroke-width="0.16%" stroke-dasharray="0.5% 0.3%" stroke-linecap="round"/>`
+        : '';
+      const box = `<rect x="${gx - gs/2}%" y="${gy - gs/2}%" width="${gs}%" height="${gs}%" fill="rgba(8,10,14,0.9)" stroke="${c}" stroke-width="${attached ? '0.18%' : '0.25%'}" rx="0.5"/>`;
+      const img = `<image href="${el.gadget.icon}" x="${gx - gs/2 + pad}%" y="${gy - gs/2 + pad}%" width="${gs - pad*2}%" height="${gs - pad*2}%"/>`;
+      const rotatedImg = rot
+        ? `<g style="transform:rotate(${rot}deg);transform-box:fill-box;transform-origin:50% 50%">${img}</g>`
+        : img;
+      return attached
+        ? `${attachment}${box}${rotatedImg}`
+        : rot
+          ? `<g style="transform:rotate(${rot}deg);transform-box:fill-box;transform-origin:50% 50%">${box}${img}</g>`
+          : `${box}${img}`;
     }
     if (el.type === 'arrow' && el.points?.length >= 2) {
       const pts = el.points.map(p => `${p.x}%,${p.y}%`).join(' ');
@@ -133,6 +154,19 @@ function buildFloorSVG(W, H, elements) {
     }
     if (el.type === 'headline' || el.type === 'feetline') {
       return `<text x="${el.x}%" y="${el.y}%" text-anchor="middle" dominant-baseline="middle" font-size="${Math.round(W*0.020)}" font-family="Arial,sans-serif" font-weight="900" fill="${c}" stroke="rgba(8,10,14,0.9)" stroke-width="2" paint-order="stroke">${el.type === 'headline' ? 'H' : 'F'}</text>`;
+    }
+    if (el.type === 'verticalholes') {
+      const scale = el.scale || 1;
+      const width = 2.2 * scale;
+      const height = 5.2 * scale;
+      const radius = 0.42 * scale;
+      const holes = [-1.5, -0.5, 0.5, 1.5]
+        .map(offset => `<circle cx="${el.x}%" cy="${el.y + offset * scale}%" r="${radius}%" fill="rgba(0,0,0,0.95)" stroke="${c}" stroke-width="0.14%"/>`)
+        .join('');
+      const body = `<rect x="${el.x - width / 2}%" y="${el.y - height / 2}%" width="${width}%" height="${height}%" rx="${width * 0.35}%" fill="rgba(8,10,14,0.82)" stroke="${c}" stroke-width="0.2%" stroke-dasharray="0.5% 0.3%"/>${holes}`;
+      return el.rotation
+        ? `<g style="transform:rotate(${el.rotation}deg);transform-box:fill-box;transform-origin:50% 50%">${body}</g>`
+        : body;
     }
     if (el.type === 'text') {
       return `<text x="${el.x}%" y="${el.y}%" font-size="14" font-family="Share Tech Mono,monospace" fill="${c}">${el.text || ''}</text>`;

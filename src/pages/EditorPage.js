@@ -3,7 +3,8 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useStrats } from '../hooks/useStrats';
 import { useEditorHistory } from '../hooks/useEditorHistory';
 import { useEditorViewport } from '../hooks/useEditorViewport';
-import { useCollab } from '../hooks/useCollab';
+import { setCollabUrl, useCollab } from '../hooks/useCollab';
+import { useEditorCollaboration } from '../hooks/useEditorCollaboration';
 import { CollabBar, CollabCursors } from '../components/editor/CollabUI';
 import { ALL_MAPS, MAP_BLUEPRINTS } from '../data/maps';
 import { ATTACKERS, DEFENDERS } from '../data/operators';
@@ -12,9 +13,32 @@ import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES, GADGETS } from '../
 import { MAP_WALLS } from '../data/walls';
 import { exportStratAsPNG } from '../utils/exportPng';
 import { detectWalls } from '../utils/wallDetector';
-import { OpIcon, OpImg } from '../components/editor/OpIcons';
+import { OpImg } from '../components/editor/OpIcons';
 import { InteractiveWall } from '../components/editor/InteractiveWall';
 import { LineupStrip, LineupConfigModal } from '../components/editor/LineupComponents';
+import { renderBasicEditorElement } from '../components/editor/BasicElementRenderer';
+import { renderWallEditorElement } from '../components/editor/WallElementRenderer';
+import { renderGadgetElement } from '../components/editor/GadgetElementRenderer';
+import { renderSpecialEditorElement } from '../components/editor/SpecialElementRenderer';
+import { getEditorCursor } from '../utils/editorTools';
+import {
+  ATTACHED_GADGET_SIZE, findNearestGadgetMarker, getAttachedGadgetPosition,
+  getDefaultAttachmentSide, getNextAttachmentSlot, layoutAttachedGadgets,
+  requiresMarker, supportsWallAttachment, upsertAttachedGadget,
+} from '../utils/gadgetPlacement';
+import { recolorElements } from '../utils/elementColor';
+import { EditorToast } from '../components/editor/EditorToast';
+import { EditorTopbar } from '../components/editor/EditorTopbar';
+import { HistoryActions } from '../components/editor/HistoryActions';
+import { StratActions } from '../components/editor/StratActions';
+import { CanvasActions } from '../components/editor/CanvasActions';
+import { StratNavigation } from '../components/editor/StratNavigation';
+import { MapPicker } from '../components/editor/MapPicker';
+import { ToolPalette } from '../components/editor/ToolPalette';
+import { StylePalette } from '../components/editor/StylePalette';
+import { OperatorPalette } from '../components/editor/OperatorPalette';
+import { CanvasTextInput } from '../components/editor/CanvasTextInput';
+import { parseCollabInvite } from '../utils/collabInvite';
 
 const WALL_STORAGE_KEY = 'clav-walls-v2';
 
@@ -29,6 +53,7 @@ const DRAW_TOOLS = [
   { id: 'rotate',        label: 'Rotate',    emoji: '⤿', shortcut: 'Y' },
   { id: 'headline',      label: 'Headline',  emoji: '═', shortcut: 'H' },
   { id: 'feetline',      label: 'Feetline',  emoji: '_', shortcut: 'L' },
+  { id: 'verticalholes', label: 'Vertical Holes', emoji: '⋮', shortcut: 'U' },
   { id: 'gadget',        label: 'Gadget',    emoji: '🎒', shortcut: 'G' },
   { id: 'text',          label: 'Text',      emoji: 'T',  shortcut: 'T' },
   { id: 'eraser',        label: 'Erase',     emoji: '⌫', shortcut: 'E' },
@@ -54,10 +79,6 @@ function makeDragGhost(iconSrc, color) {
   document.body.appendChild(wrap);
   setTimeout(() => { try { document.body.removeChild(wrap); } catch {} }, 100);
   return wrap;
-}
-
-function Toast({ msg }) {
-  return msg ? <div className="toast">✓ {msg}</div> : null;
 }
 
 function findNearestWall(pt, walls, maxDist) {
@@ -142,72 +163,6 @@ function ExportModal({ floors, selectedFloor, onClose, onExport }) {
   );
 }
 
-// ── Map Picker ────────────────────────────────────────────────────────────────
-function MapPicker({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  const current = ALL_MAPS.find(m => m.id === value);
-
-  useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <button
-        className="topbar-btn"
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8, minWidth: 160,
-          borderColor: open ? 'var(--accent-gold)' : value ? 'rgba(232,184,75,0.4)' : 'rgba(232,75,75,0.5)',
-          color: value ? 'var(--accent-gold)' : '#ff8080',
-          fontWeight: 600, fontSize: 12, letterSpacing: 1,
-          background: value ? 'rgba(232,184,75,0.06)' : 'rgba(232,75,75,0.06)',
-        }}
-      >
-        {current?.preview && (
-          <img src={current.preview} alt="" style={{ width: 28, height: 18, objectFit: 'cover', borderRadius: 2, opacity: 0.85 }} />
-        )}
-        <span>{current ? current.name : '⚠ SELECT MAP'}</span>
-        <span style={{ marginLeft: 'auto', opacity: 0.5 }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, zIndex: 999, marginTop: 4,
-          background: 'var(--bg-deep)', border: '1px solid var(--border-accent)',
-          borderRadius: 8, padding: 10, width: 340,
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-        }}>
-          <div style={{ gridColumn: '1/-1', fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: 2, color: 'var(--text-muted)', paddingBottom: 4 }}>
-            COMPETITIVE
-          </div>
-          {ALL_MAPS.filter(m => m.type === 'competitive').map(m => (
-            <button key={m.id} onClick={() => { onChange(m.id); setOpen(false); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
-                background: value === m.id ? 'rgba(232,184,75,0.12)' : 'rgba(255,255,255,0.03)',
-                border: `1px solid ${value === m.id ? 'rgba(232,184,75,0.4)' : 'rgba(255,255,255,0.06)'}`,
-                borderRadius: 6, cursor: 'pointer', textAlign: 'left',
-                color: value === m.id ? 'var(--accent-gold)' : 'var(--text-primary)',
-                fontSize: 12, fontWeight: value === m.id ? 700 : 400, transition: 'all 0.1s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(232,184,75,0.08)'}
-              onMouseLeave={e => e.currentTarget.style.background = value === m.id ? 'rgba(232,184,75,0.12)' : 'rgba(255,255,255,0.03)'}
-            >
-              {m.preview && <img src={m.preview} alt="" style={{ width: 36, height: 24, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />}
-              <span>{m.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Main Editor ───────────────────────────────────────────────────────────────
 export default function EditorPage() {
   const { stratId } = useParams();
@@ -255,6 +210,14 @@ export default function EditorPage() {
   // ── collaboration (Yjs) ──────────────────────────────────────────────────
   const room   = sp.get('room') || null;
   const collab = useCollab(room);
+  const hostingCollabRef = useRef(sp.get('collabHost') === '1');
+  useEffect(() => () => {
+    if (!hostingCollabRef.current || !window.__TAURI_INTERNALS__) return;
+    hostingCollabRef.current = false;
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('stop_collab_host'))
+      .catch(error => console.error('[collab host cleanup]', error));
+  }, []);
   const applyingRemoteRef = useRef(false); // guards elements/lineups remote apply
   const metaApplyingRef   = useRef(false); // guards meta remote apply
   const canPushRef        = useRef(false); // only push local->remote after initial sync
@@ -296,7 +259,7 @@ export default function EditorPage() {
   const floorRef       = useRef(selectedFloor);
   const mapRef         = useRef(selectedMap);
   const [toast, setToast]                   = useState('');
-  const [textInput, setTextInput]           = useState({ active: false, x: 0, y: 0, val: '' });
+  const [textInput, setTextInput]           = useState({ active: false, x: 0, y: 0, clientX: 0, clientY: 0, val: '' });
   const [customWalls, setCustomWalls]       = useState(() => {
     try {
       const saved = localStorage.getItem(WALL_STORAGE_KEY);
@@ -634,10 +597,24 @@ export default function EditorPage() {
     if (e.altKey) {
       e.stopPropagation();
       const ids = selectedIds.includes(elementId) && selectedIds.length > 1 ? selectedIds : [elementId];
-      setElements(prev => prev.map(el => ids.includes(el.id) && el.color ? { ...el, color: activeColor } : el), { groupKey: 'recolor' });
+      setElements(prev => recolorElements(prev, ids, activeColor), { groupKey: 'recolor' });
       return true;
     }
-    if (activeTool !== 'select') return false;
+    const clickedElement = elements.find(element => element.id === elementId);
+    if (activeTool === 'eraser') {
+      e.stopPropagation();
+      return true;
+    }
+    if (clickedElement?.color && clickedElement.color !== activeColor) {
+      e.stopPropagation();
+      setElements(prev => recolorElements(prev, [elementId], activeColor), { groupKey:'recolor' });
+      if (activeTool === 'select') setSelectedIds([elementId]);
+      return true;
+    }
+    if (activeTool !== 'select') {
+      e.stopPropagation();
+      return true;
+    }
     e.stopPropagation();
     if (e.shiftKey) {
       setSelectedIds(prev => prev.includes(elementId)
@@ -672,7 +649,10 @@ export default function EditorPage() {
     if (e.button !== 0) return;
     const pt = toCanvas(e.clientX, e.clientY);
 
-    if (activeTool === 'text') { setTextInput({ active: true, x: pt.x, y: pt.y, val: '' }); return; }
+    if (activeTool === 'text') {
+      setTextInput({ active:true, x:pt.x, y:pt.y, clientX:e.clientX, clientY:e.clientY, val:'' });
+      return;
+    }
     if (activeTool === 'operator') {
       drawStartRef.current = { ...pt, time: Date.now(), mode: 'op-place' };
       isDrawingRef.current = true; setIsDrawing(true);
@@ -686,10 +666,26 @@ export default function EditorPage() {
       showToast('Barricades can only be placed on marked doors/windows');
       return;
     }
+    if (activeTool === 'verticalholes') {
+      setElements(prev => [...prev, {
+        id:Date.now(), type:'verticalholes', x:pt.x, y:pt.y,
+        color:activeColor, scale:1, rotation:0,
+        floor:selectedFloor, mapId:selectedMap,
+      }]);
+      return;
+    }
     if (activeTool === 'rotate' || activeTool === 'headline' || activeTool === 'feetline') {
       const snap = findNearestWall(pt, interactiveWalls, 5);
       if (snap) {
-        setElements(prev => [...prev, { id: Date.now(), type: activeTool, wallId: snap.id, x: snap.x, y: snap.y, w: snap.w, h: snap.h, color: activeColor, horizontal: snap.horizontal, floor: selectedFloor, mapId: selectedMap }]);
+        setElements(prev => {
+          const existing = prev.find(element => element.wallId === snap.id && element.type === activeTool);
+          if (existing) {
+            return existing.color === activeColor
+              ? prev
+              : prev.map(element => element.id === existing.id ? { ...element, color:activeColor } : element);
+          }
+          return [...prev, { id: Date.now(), type: activeTool, wallId: snap.id, x: snap.x, y: snap.y, w: snap.w, h: snap.h, color: activeColor, horizontal: snap.horizontal, floor: selectedFloor, mapId: selectedMap }];
+        });
       } else if (e.shiftKey || activeTool === 'rotate') {
         setElements(prev => [...prev, { id: Date.now(), type: activeTool, x: pt.x, y: pt.y, color: activeColor, horizontal: activeTool === 'rotate' ? rotateOrient === 'h' : false, floor: selectedFloor, mapId: selectedMap }]);
       } else {
@@ -835,6 +831,12 @@ export default function EditorPage() {
     e.stopPropagation();
     if (e.altKey) return; // Alt+click is handled as recolor in startDrag
     if (activeTool === 'eraser') { setElements(prev => prev.filter(el => el.id !== id)); return; }
+    const clickedElement = elements.find(element => element.id === id);
+    if (clickedElement?.color && clickedElement.color !== activeColor) {
+      setElements(previous => recolorElements(previous, [id], activeColor), { groupKey:'recolor' });
+      if (activeTool === 'select') setSelectedIds([id]);
+      return;
+    }
     if (activeTool === 'reinforcement') { setElements(prev => prev.map(el => el.id === id && el.type === 'reinforcement' ? { ...el, horizontal: !el.horizontal } : el)); return; }
     if (activeTool === 'select') setSelectedIds([id]);
   };
@@ -880,9 +882,9 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [routeDraft, finishRoute]);
 
-  const submitText = () => {
-    if (textInput.val.trim()) {
-      setElements(prev => [...prev, { id: Date.now(), type: 'text', x: textInput.x, y: textInput.y, text: textInput.val, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
+  const submitText = (value = textInput.val) => {
+    if (value.trim()) {
+      setElements(prev => [...prev, { id: Date.now(), type: 'text', x: textInput.x, y: textInput.y, text:value, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
     }
     setTextInput({ active: false, x: 0, y: 0, val: '' });
   };
@@ -926,123 +928,71 @@ export default function EditorPage() {
   }, [elements, lineupsByContext, stratName, side, selectedFloor, description, tags]); // eslint-disable-line
 
   // ── collab sync: remote → local (observe Yjs, apply without history push) ──
-  useEffect(() => {
-    const { yElements, yLineups, yMeta } = collab;
-    if (!yElements || !yLineups || !yMeta) return;
-
-    const pullElements = () => {
-      applyingRemoteRef.current = true;
-      history.applyRemote(prev => ({ ...prev, elements: Array.from(yElements.values()) }));
-      applyingRemoteRef.current = false;
-    };
-    const pullLineups = () => {
-      applyingRemoteRef.current = true;
-      const obj = {}; yLineups.forEach((v, k) => { obj[k] = v; });
-      history.applyRemote(prev => ({ ...prev, lineupsByContext: obj }));
-      applyingRemoteRef.current = false;
-    };
-    const pullMeta = () => {
-      metaApplyingRef.current = true;
-      if (yMeta.has('name'))        setStratName(yMeta.get('name'));
-      if (yMeta.has('side'))        setSide(yMeta.get('side'));
-      if (yMeta.has('floor'))       setSelectedFloor(yMeta.get('floor'));
-      if (yMeta.has('map'))         setSelectedMap(yMeta.get('map'));
-      if (yMeta.has('description')) setDescription(yMeta.get('description'));
-      if (yMeta.has('tags'))        setTags(yMeta.get('tags'));
-      metaApplyingRef.current = false;
-    };
-
-    const oEl = (_e, txn) => { if (txn.origin !== 'local') pullElements(); };
-    const oLu = (_e, txn) => { if (txn.origin !== 'local') pullLineups(); };
-    const oMe = (_e, txn) => { if (txn.origin !== 'local') pullMeta(); };
-    yElements.observe(oEl);
-    yLineups.observe(oLu);
-    yMeta.observe(oMe);
-    return () => { yElements.unobserve(oEl); yLineups.unobserve(oLu); yMeta.unobserve(oMe); };
-  }, [collab.ydoc]); // eslint-disable-line
+  const applyCollabMeta = useCallback((yMeta) => {
+    if (yMeta.has('name')) setStratName(yMeta.get('name'));
+    if (yMeta.has('side')) setSide(yMeta.get('side'));
+    if (yMeta.has('floor')) setSelectedFloor(yMeta.get('floor'));
+    if (yMeta.has('map')) setSelectedMap(yMeta.get('map'));
+    if (yMeta.has('description')) setDescription(yMeta.get('description'));
+    if (yMeta.has('tags')) setTags(yMeta.get('tags'));
+  }, []);
 
   // ── collab: once initial state has synced, pull it, then allow local pushes ─
-  useEffect(() => {
-    canPushRef.current = false;
-  }, [room]);
-  useEffect(() => {
-    const { yElements, yLineups, yMeta } = collab;
-    if (!collab.synced || !yElements) return;
-    applyingRemoteRef.current = true;
-    if (yElements.size) history.applyRemote(prev => ({ ...prev, elements: Array.from(yElements.values()) }));
-    if (yLineups.size) { const o = {}; yLineups.forEach((v, k) => { o[k] = v; }); history.applyRemote(prev => ({ ...prev, lineupsByContext: o })); }
-    applyingRemoteRef.current = false;
-    metaApplyingRef.current = true;
-    if (yMeta.has('name'))        setStratName(yMeta.get('name'));
-    if (yMeta.has('side'))        setSide(yMeta.get('side'));
-    if (yMeta.has('floor'))       setSelectedFloor(yMeta.get('floor'));
-    if (yMeta.has('map'))         setSelectedMap(yMeta.get('map'));
-    if (yMeta.has('description')) setDescription(yMeta.get('description'));
-    if (yMeta.has('tags'))        setTags(yMeta.get('tags'));
-    metaApplyingRef.current = false;
-    canPushRef.current = true;
-  }, [collab.synced]); // eslint-disable-line
+  const collabMeta = useMemo(() => ({
+    name: stratName, side, floor: selectedFloor, map: selectedMap, description, tags,
+  }), [stratName, side, selectedFloor, selectedMap, description, tags]);
+  useEditorCollaboration({
+    collab, room, elements, lineupsByContext, meta: collabMeta, history,
+    applyingRemoteRef, metaApplyingRef, canPushRef, setMeta: applyCollabMeta,
+  });
 
   // ── collab sync: local → remote (diff into Yjs maps, origin 'local') ──────
-  useEffect(() => {
-    const { yElements, ydoc } = collab;
-    if (!yElements || !ydoc || !canPushRef.current || applyingRemoteRef.current) return;
-    ydoc.transact(() => {
-      const ids = new Set();
-      for (const el of elements) {
-        if (el.id == null) continue;
-        const id = String(el.id); ids.add(id);
-        if (JSON.stringify(yElements.get(id)) !== JSON.stringify(el)) yElements.set(id, el);
-      }
-      for (const k of Array.from(yElements.keys())) if (!ids.has(k)) yElements.delete(k);
-    }, 'local');
-  }, [elements]); // eslint-disable-line
-
-  useEffect(() => {
-    const { yLineups, ydoc } = collab;
-    if (!yLineups || !ydoc || !canPushRef.current || applyingRemoteRef.current) return;
-    ydoc.transact(() => {
-      const keys = new Set();
-      for (const [k, v] of Object.entries(lineupsByContext)) {
-        keys.add(k);
-        if (JSON.stringify(yLineups.get(k)) !== JSON.stringify(v)) yLineups.set(k, v);
-      }
-      for (const k of Array.from(yLineups.keys())) if (!keys.has(k)) yLineups.delete(k);
-    }, 'local');
-  }, [lineupsByContext]); // eslint-disable-line
-
-  useEffect(() => {
-    const { yMeta, ydoc } = collab;
-    if (!yMeta || !ydoc || !canPushRef.current || metaApplyingRef.current) return;
-    ydoc.transact(() => {
-      const set = (k, v) => { if (JSON.stringify(yMeta.get(k)) !== JSON.stringify(v)) yMeta.set(k, v); };
-      set('name', stratName); set('side', side); set('floor', selectedFloor);
-      set('map', selectedMap); set('description', description); set('tags', tags);
-    }, 'local');
-  }, [stratName, side, selectedFloor, selectedMap, description, tags]); // eslint-disable-line
-
-  // Start a collab session: generate a room id and add it to the URL (keeps map/strat).
-  const startCollab = useCallback(() => {
-    const id = (window.crypto?.randomUUID?.() || `${Date.now()}${Math.random()}`).replace(/[^\w]/g, '').slice(0, 10);
+  // Tauri starts both the embedded Yjs server and a temporary public tunnel.
+  const startCollab = useCallback(async () => {
+    if (!window.__TAURI_INTERNALS__) {
+      throw new Error('Automatic Live Collab hosting requires the Tauri desktop app.');
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    const host = await invoke('start_collab_host');
+    if (!host?.serverUrl) {
+      throw new Error('The public collaboration server did not return an address.');
+    }
+    setCollabUrl(host.serverUrl);
+    hostingCollabRef.current = true;
+    const id = (window.crypto?.randomUUID?.() || `${Date.now()}${Math.random()}`)
+      .replace(/[^\w]/g, '')
+      .slice(0, 16);
     const next = new URLSearchParams(sp);
     next.set('room', id);
+    next.set('collabHost', '1');
     setSp(next);
-  }, [sp, setSp]);
+    showToast('Live Collab is ready — share the invitation code');
+  }, [sp, setSp, showToast]);
 
-  const leaveCollab = useCallback(() => {
+  const leaveCollab = useCallback(async () => {
     const next = new URLSearchParams(sp);
     next.delete('room');
+    next.delete('collabHost');
     setSp(next);
+    if (hostingCollabRef.current && window.__TAURI_INTERNALS__) {
+      hostingCollabRef.current = false;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('stop_collab_host');
+      } catch (error) {
+        console.error('[collab host stop]', error);
+      }
+    }
   }, [sp, setSp]);
 
-  // Join a room from a pasted code, invite link (clavstrats://join/<id>) or ?room= URL.
+  // New invitation codes carry both the room and its tunnel. Raw legacy room codes still work.
   const joinCollab = useCallback((input) => {
-    const s = String(input || '').trim();
-    const m = s.match(/join\/([\w-]+)/) || s.match(/room=([\w-]+)/) || s.match(/^([\w-]+)$/);
-    const id = m && m[1];
-    if (!id) return;
+    const invitation = parseCollabInvite(input);
+    if (invitation.serverUrl) setCollabUrl(invitation.serverUrl);
     const next = new URLSearchParams(sp);
-    next.set('room', id);
+    next.set('room', invitation.room);
+    next.delete('collabHost');
+    hostingCollabRef.current = false;
     setSp(next);
   }, [sp, setSp]);
 
@@ -1051,6 +1001,64 @@ export default function EditorPage() {
       navigate('/editor');
       setTimeout(() => { history.reset({ elements: [], lineupsByContext: {} }); setStratName('Untitled Strat'); setDescription(''); setTags([]); }, 50);
     }
+  };
+
+  const handleDuplicateStrat = () => {
+    const copy = {
+      ...JSON.parse(JSON.stringify({ elements, lineupsByContext, side, description, tags })),
+      id: undefined,
+      name: `${stratName} (Copy)`,
+      mapId: selectedMap,
+      floor: selectedFloor,
+    };
+    const saved = saveStrat(copy);
+    navigate(`/editor/${saved.id}`);
+    showToast('Strat duplicated!');
+  };
+
+  const handleEditNote = () => {
+    const nextDescription = window.prompt('Note:', description);
+    if (nextDescription !== null) setDescription(nextDescription);
+  };
+
+  const handleDeleteSelection = () => {
+    setElements(previous => previous.filter(element => !selectedIds.includes(element.id)));
+    setSelectedIds([]);
+  };
+
+  const handleClearElements = () => {
+    if (!window.confirm('Clear all elements?')) return;
+    setElements([]);
+    setSelectedIds([]);
+  };
+
+  const handleToolSelect = (toolId) => {
+    setActiveTool(toolId);
+    if (toolId !== 'operator') setPendingOp(null);
+    if (toolId !== 'gadget') setPendingGadget(null);
+  };
+
+  const handleGadgetDragStart = (event, gadget) => {
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget, color:activeColor }));
+    event.dataTransfer.setDragImage(makeDragGhost(gadget.icon, activeColor), 22, 22);
+    const drag = { gadget, color:activeColor };
+    draggingRef.current = drag;
+    setDraggingGadget(drag);
+  };
+
+  const handleGadgetDragEnd = () => {
+    draggingRef.current = null;
+    setDraggingGadget(null);
+    setDragPreview(null);
+  };
+
+  const handleOperatorMouseDown = (event, operator) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const drag = { op:operator, color:activeColor };
+    opDragRef.current = drag;
+    setOpDrag({ ...drag, clientX:event.clientX, clientY:event.clientY });
   };
 
   const addTag = () => {
@@ -1070,186 +1078,18 @@ export default function EditorPage() {
       e.preventDefault(); e.stopPropagation();
       setElements(prev => prev.filter(x => x.id !== el.id));
     };
-
-    if (el.type === 'arrow') {
-      const mid = `arr-${key}`;
-      return (
-        <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-          <defs><marker id={mid} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill={el.color}/></marker></defs>
-          <line x1={`${el.x1}%`} y1={`${el.y1}%`} x2={`${el.x2}%`} y2={`${el.y2}%`} stroke={el.color} strokeWidth={el.width||3} strokeLinecap="round" markerEnd={`url(#${mid})`} style={{cursor:'pointer'}}/>
-          <line x1={`${el.x1}%`} y1={`${el.y1}%`} x2={`${el.x2}%`} y2={`${el.y2}%`} stroke="transparent" strokeWidth={16} style={{cursor:'pointer'}}/>
-        </g>
-      );
-    }
-    if (el.type === 'route') {
-      const pts = el.points || [{x:el.x1,y:el.y1},{x:el.x2,y:el.y2}];
-      const d   = pts.map((p,i) => `${i===0?'M':'L'}${p.x}% ${p.y}%`).join(' ');
-      return (
-        <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-          <path d={d} stroke={el.color} strokeWidth={el.width||3} strokeDasharray="5 3" strokeLinecap="round" fill="none" style={{cursor:'pointer'}}/>
-          <path d={d} stroke="transparent" strokeWidth={14} fill="none" style={{cursor:'pointer'}}/>
-        </g>
-      );
-    }
-    if (el.type === 'zone') {
-      const sharedStyle = { cursor: 'pointer', ...glow };
-      const rx = Math.min(el.x1, el.x2), ry2 = Math.min(el.y1, el.y2);
-      const rw = Math.abs(el.x2 - el.x1), rh = Math.abs(el.y2 - el.y1);
-      return <rect key={key} x={`${rx}%`} y={`${ry2}%`} width={`${Math.max(rw,0.3)}%`} height={`${Math.max(rh,0.2)}%`} stroke={el.color} strokeWidth={el.width||2} fill={el.color+'22'} rx="0.3" style={sharedStyle} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}/>;
-    }
-    if (el.type === 'text') {
-      return <text key={key} x={`${el.x}%`} y={`${el.y}%`} fill={el.color} fontSize="14" fontFamily="'Share Tech Mono',monospace" style={{userSelect:'none',cursor:'pointer',...glow}} onClick={onClick} onMouseDown={onMd}>{el.text}</text>;
-    }
-    if (el.type === 'reinforcement') {
-      if (el.wallId) return null; // wall-attached: rendered by InteractiveWall
-      const s = el.scale || 1;
-      const w = (el.w != null ? el.w : (el.horizontal ? 3.0 : 0.65)) * s;
-      const h = (el.h != null ? el.h : (el.horizontal ? 0.65 : 3.0)) * s;
-      const px = el.x - w/2, py = el.y - h/2;
-      const pid = `rp-${key}`;
-      const isHatchReinforce = el.w != null && el.h != null && Math.abs(el.w - el.h) < el.w * 0.5;
-      return (
-        <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-          <defs>
-            {isHatchReinforce
-              ? <pattern id={pid} width="10" height="6" patternUnits="userSpaceOnUse">
-                  <rect width="10" height="6" fill={el.color}/>
-                  <rect width="10" height="3" fill="rgba(0,0,0,0.55)"/>
-                </pattern>
-              : <pattern id={pid} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                  <rect width="6" height="6" fill={el.color}/>
-                  <rect width="3" height="6" fill="rgba(0,0,0,0.55)"/>
-                </pattern>
-            }
-          </defs>
-          <rect x={`${px}%`} y={`${py}%`} width={`${w}%`} height={`${h}%`} fill={`url(#${pid})`} stroke={el.color} strokeWidth="1.5" rx="0.5" style={{cursor:'pointer'}}/>
-          <text x={`${el.x}%`} y={`${el.y+0.35}%`} textAnchor="middle" dominantBaseline="middle" fontSize="24" fontFamily="Arial,sans-serif" fontWeight="900" fill={el.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke" style={{pointerEvents:'none',userSelect:'none'}}>R</text>
-        </g>
-      );
-    }
-    if (el.type === 'barricade') {
-      if (el.wallId) return null; // opening-attached: rendered by InteractiveWall
-      const s = el.scale || 1;
-      const bw = (el.w != null ? Math.max(el.w, 1.0) : 1.2) * s;
-      const bh = (el.h != null ? Math.max(el.h, 1.0) : 2.4) * s;
-      const pid = `barr-${el.id}`;
-      return (
-        <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-          <defs>
-            <pattern id={pid} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-              <rect width="3" height="6" fill={el.color + 'CC'}/>
-            </pattern>
-          </defs>
-          <rect x={`${el.x-bw/2}%`} y={`${el.y-bh/2}%`} width={`${bw}%`} height={`${bh}%`} fill={`url(#${pid})`} rx="0.3" style={{cursor:'pointer'}}/>
-          <text x={`${el.x}%`} y={`${el.y+0.3}%`} textAnchor="middle" dominantBaseline="middle" fontSize="22" fontFamily="Arial,sans-serif" fontWeight="900" fill={el.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke" style={{pointerEvents:'none',userSelect:'none'}}>B</text>
-        </g>
-      );
-    }
-    if (el.type === 'rotate' || el.type === 'headline' || el.type === 'feetline') {
-      const s = el.scale || 1;
-      const isHorizontalWall = el.horizontal !== false;
-      const defLong = 4.5 * s, defShort = 0.9 * s;
-      const rw = el.w != null ? el.w * s : (isHorizontalWall ? defLong : defShort);
-      const rh = el.h != null ? el.h * s : (isHorizontalWall ? defShort : defLong);
-      const rx = el.x - rw/2, ry = el.y - rh/2;
-      const horiz = rw >= rh;
-      const c = el.color;
-      // label position: outside the rect on the "open" side
-      const lblX = horiz ? el.x         : el.x + rw/2 + 1.6;
-      const lblY = horiz ? el.y + rh/2 + 1.9 : el.y;
-
-      // ── Headline ─────────────────────────────────────────────────────────────
-      // Fully opaque solid block — looks like a painted wall section
-      if (el.type === 'headline') {
-        return (
-          <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-            <circle cx={`${el.x}%`} cy={`${el.y}%`} r="1.2%" fill="transparent" style={{cursor:'pointer'}}/>
-            <text x={`${el.x}%`} y={`${el.y}%`} textAnchor="middle" dominantBaseline="middle"
-              fontSize="24" fontFamily="Arial,sans-serif" fontWeight="900"
-              fill={c} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
-              style={{pointerEvents:'none',userSelect:'none'}}>H</text>
-          </g>
-        );
-      }
-
-      // ── Feetline ──────────────────────────────────────────────────────────────
-      if (el.type === 'feetline') {
-        return (
-          <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-            <circle cx={`${el.x}%`} cy={`${el.y}%`} r="1.2%" fill="transparent" style={{cursor:'pointer'}}/>
-            <text x={`${el.x}%`} y={`${el.y}%`} textAnchor="middle" dominantBaseline="middle"
-              fontSize="24" fontFamily="Arial,sans-serif" fontWeight="900"
-              fill={c} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
-              style={{pointerEvents:'none',userSelect:'none'}}>F</text>
-          </g>
-        );
-      }
-
-      // ── Rotate ────────────────────────────────────────────────────────────────
-      // Circle (not a rectangle) + rotation arrow
-      const r = Math.min(rw, rh) / 2;
-      const cx2 = el.x, cy2 = el.y;
-      // arc: 270° sweep from top, with arrowhead at end
-      const startAngle = -Math.PI / 2;
-      const sweep = Math.PI * 1.55;
-      const endAngle = startAngle + sweep;
-      const ax1 = cx2 + r * Math.cos(startAngle);
-      const ay1 = cy2 + r * Math.sin(startAngle);
-      const ax2 = cx2 + r * Math.cos(endAngle);
-      const ay2 = cy2 + r * Math.sin(endAngle);
-      // arrowhead direction (tangent at end)
-      const tgx = -Math.sin(endAngle), tgy = Math.cos(endAngle);
-      const aSize = r * 0.35;
-      return (
-        <g key={key} style={glow} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}>
-          {/* invisible click target */}
-          <circle cx={`${cx2}%`} cy={`${cy2}%`} r={`${r+0.3}%`} fill="transparent" style={{cursor:'pointer'}}/>
-          {/* rotation arc */}
-          <path
-            d={`M ${ax1}% ${ay1}% A ${r}% ${r}% 0 1 1 ${ax2}% ${ay2}%`}
-            fill="none" stroke={c} strokeWidth="3" strokeLinecap="round"
-            style={{pointerEvents:'none'}}/>
-          {/* arrowhead */}
-          <polygon
-            points={`${ax2}%,${ay2}% ${ax2 - (tgx*aSize + tgy*aSize*0.5)}%,${ay2 - (tgy*aSize - tgx*aSize*0.5)}% ${ax2 - (tgx*aSize - tgy*aSize*0.5)}%,${ay2 - (tgy*aSize + tgx*aSize*0.5)}%`}
-            fill={c} style={{pointerEvents:'none'}}/>
-          {/* colored circle background */}
-          <circle cx={`${el.x}%`} cy={`${el.y}%`} r="1.5%" fill={c + '33'} stroke={c} strokeWidth="0.8" style={{pointerEvents:'none'}}/>
-          {/* Icon: fixed 4% square — consistent across all wall sizes */}
-          <image href="/icons/game_r6_rotate_vkme7.webp"
-            x={`${el.x - 2}%`} y={`${el.y - 2}%`}
-            width="4%" height="4%"
-            preserveAspectRatio="xMidYMid meet"
-            style={{pointerEvents:'none'}}/>
-        </g>
-      );
-    }
-    if (el.type === 'gadget') {
-      if (el.wallId) return null; // snapped to an opening: rendered by InteractiveWall
-      const gs  = 3.4 * (el.scale || 1);
-      const pad = gs * 0.1;
-      const rot = el.rotation || 0;
-      const rotStyle = rot ? { transform: `rotate(${rot}deg)`, transformOrigin: '50% 50%', transformBox: 'fill-box' } : {};
-      return (
-        <g key={key} style={{ ...glow, ...rotStyle }} onClick={onClick} onMouseDown={onMd} onContextMenu={onCtxMenu}
-          onMouseEnter={preview ? undefined : () => { hoveredElIdRef.current = el.id; }}
-          onMouseLeave={preview ? undefined : () => { hoveredElIdRef.current = null; }}>
-          <rect x={`${el.x-gs/2}%`} y={`${el.y-gs/2}%`} width={`${gs}%`} height={`${gs}%`} fill="rgba(8,10,14,0.85)" stroke={el.color} strokeWidth="1.5" rx="0.6" style={{cursor:'pointer'}}/>
-          {el.gadget?.icon && <image href={el.gadget.icon} x={`${el.x-gs/2+pad}%`} y={`${el.y-gs/2+pad}%`} width={`${gs-pad*2}%`} height={`${gs-pad*2}%`} style={{pointerEvents:'none'}}/>}
-        </g>
-      );
-    }
+    const basicElement = renderBasicEditorElement({ el, preview, key, glow, onClick, onMouseDown: onMd, onContextMenu: onCtxMenu });
+    if (basicElement) return basicElement;
+    const wallElement = renderWallEditorElement({ el, key, glow, onClick, onMouseDown: onMd, onContextMenu: onCtxMenu });
+    if (wallElement !== undefined) return wallElement;
+    const specialElement = renderSpecialEditorElement({ el, key, glow, onClick, onMouseDown: onMd, onContextMenu: onCtxMenu });
+    if (specialElement !== undefined) return specialElement;
+    const gadgetElement = renderGadgetElement({ el, preview, key, glow, onClick, onMouseDown: onMd, onContextMenu: onCtxMenu, hoveredElIdRef });
+    if (gadgetElement !== undefined) return gadgetElement;
     return null;
   };
 
-  const getCursor = () => {
-    if (activeTool === 'eraser') return 'crosshair';
-    if (activeTool === 'operator' && pendingOp) return 'copy';
-    if (activeTool === 'gadget' && pendingGadget) return 'copy';
-    if (['reinforcement','barricade','rotate','headline','feetline','gadget'].includes(activeTool)) return 'cell';
-    if (activeTool === 'select') return 'default';
-    return 'crosshair';
-  };
+  const getCursor = () => getEditorCursor(activeTool, pendingOp, pendingGadget);
 
   const { zoom, panX, panY } = vpState;
 
@@ -1258,188 +1098,77 @@ export default function EditorPage() {
     <div className="editor-layout">
 
       {/* Top Bar */}
-      <div className="editor-topbar">
-        <input className="topbar-input" value={stratName} onChange={e => setStratName(e.target.value)} placeholder="Strat name..."/>
-        <MapPicker value={selectedMap} onChange={setSelectedMap} />
-        {selectedMap && (() => {
-          const mapStrats = strats.filter(s => s.mapId === selectedMap);
-          return mapStrats.length > 0 ? (
-            <select className="topbar-select" value={stratId || ''} style={{ maxWidth: 160 }}
-              onChange={e => e.target.value ? navigate(`/editor/${e.target.value}`) : handleNewStrat()}>
-              <option value="">+ New Strat</option>
-              {mapStrats.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          ) : null;
-        })()}
-        <button className="topbar-btn" onClick={history.undo} disabled={!history.canUndo}
-          title="Undo (Ctrl+Z)" style={{ opacity: history.canUndo ? 1 : 0.4, cursor: history.canUndo ? 'pointer' : 'not-allowed' }}>↶</button>
-        <button className="topbar-btn" onClick={history.redo} disabled={!history.canRedo}
-          title="Redo (Ctrl+Shift+Z)" style={{ opacity: history.canRedo ? 1 : 0.4, cursor: history.canRedo ? 'pointer' : 'not-allowed' }}>↷</button>
+      <EditorTopbar>
+        <StratNavigation
+          stratName={stratName}
+          onNameChange={setStratName}
+          mapPicker={<MapPicker value={selectedMap} onChange={setSelectedMap}/>}
+          selectedMap={selectedMap}
+          stratId={stratId}
+          strats={strats}
+          onOpenStrat={id => navigate(`/editor/${id}`)}
+          onNewStrat={handleNewStrat}
+        />
+        <HistoryActions history={history}/>
         <div className="topbar-spacer"/>
-        {selectedIds.length > 0 && (
-          <button className="topbar-btn" onClick={() => { setElements(p=>p.filter(el=>!selectedIds.includes(el.id))); setSelectedIds([]); }}>
-            🗑 {selectedIds.length} delete
-          </button>
-        )}
-        <button className="topbar-btn" onClick={reDetectWalls} disabled={!mapImage || detectingWalls}
-          title="Re-detect walls/doors/hatches from blueprint"
-          style={{ borderColor: '#50E8A0', color: '#50E8A0', opacity: (!mapImage || detectingWalls) ? 0.4 : 1 }}>
-          {detectingWalls ? '⏳' : '🤖'} Re-Detect
-        </button>
-        <button className={`topbar-btn ${showGrid ? 'save' : ''}`} onClick={() => setShowGrid(g => !g)} title="Grid ein/aus">⊞ Grid</button>
-        <button className="topbar-btn" onClick={resetView} title="Reset zoom">🔍 {Math.round(zoom*100)}%</button>
-        <button className="topbar-btn" onClick={() => { if(window.confirm('Clear all elements?')) { setElements([]); setSelectedIds([]); } }}>Clear</button>
-        <button className="topbar-btn" disabled={exporting}
-          onClick={() => setExportModal(true)}
-          style={{ opacity: exporting ? 0.5 : 1, borderColor: 'rgba(232,184,75,0.4)', color: 'var(--accent-gold)' }}>
-          {exporting ? '⏳' : '📷'} PNG
-        </button>
-        <button className="topbar-btn" onClick={handleNewStrat} title="New empty strat">＋ New</button>
-        <button className="topbar-btn" onClick={() => setLineupPickerOpen(true)} title="Load a saved lineup">📋 Lineup</button>
-        <button className="topbar-btn" title="Duplicate strat" onClick={() => {
-          const copy = {
-            ...JSON.parse(JSON.stringify({ elements, lineupsByContext, side, description, tags })),
-            id: undefined,
-            name: `${stratName} (Copy)`,
-            mapId: selectedMap, floor: selectedFloor,
-          };
-          const saved = saveStrat(copy);
-          navigate(`/editor/${saved.id}`);
-          showToast('Strat duplicated!');
-        }}>⧉ Copy</button>
-        <button className="topbar-btn" title={description || 'Add a note'}
-          style={{ borderColor: description ? 'rgba(232,184,75,0.5)' : undefined, color: description ? 'var(--accent-gold)' : undefined }}
-          onClick={() => {
-            const d = window.prompt('Note:', description);
-            if (d !== null) setDescription(d);
-          }}>📝 {description ? 'Note ✓' : 'Note'}</button>
-        <button className="topbar-btn save" onClick={handleSave}>💾 Save</button>
-      </div>
+        <CanvasActions
+          selectedCount={selectedIds.length}
+          canDetectWalls={!!mapImage}
+          detectingWalls={detectingWalls}
+          showGrid={showGrid}
+          zoom={zoom}
+          exporting={exporting}
+          onDeleteSelection={handleDeleteSelection}
+          onDetectWalls={reDetectWalls}
+          onToggleGrid={() => setShowGrid(value => !value)}
+          onResetView={resetView}
+          onClear={handleClearElements}
+          onExport={() => setExportModal(true)}
+          onOpenLineup={() => setLineupPickerOpen(true)}
+        />
+        <StratActions
+          description={description}
+          onNew={handleNewStrat}
+          onDuplicate={handleDuplicateStrat}
+          onEditNote={handleEditNote}
+          onSave={handleSave}
+        />
+      </EditorTopbar>
 
       {/* Left Panel */}
       <aside className="editor-sidebar">
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">Tools</div>
-          <div className="tool-grid">
-            {DRAW_TOOLS.map(t => (
-              <button key={t.id} className={`tool-btn ${activeTool===t.id?'active':''}`}
-                onClick={() => { setActiveTool(t.id); if(t.id!=='operator') setPendingOp(null); if(t.id!=='gadget') setPendingGadget(null); }}
-                title={t.label}>
-                <span>{t.emoji}</span>
-                <span className="tool-btn-label">{t.label}</span>
-              </button>
-            ))}
-          </div>
-          {activeTool==='reinforcement' && (
-            <div style={{ marginTop:8, padding:'5px 8px', background:'var(--bg-panel)', borderRadius:4, fontFamily:'var(--font-mono)', fontSize:10, color: reinforceCount>=10?'var(--accent-red)':'var(--accent-gold)' }}>
-              🧱 {reinforceCount}/10 · walls/hatches only
-            </div>
-          )}
-          {activeTool==='rotate' && (
-            <div style={{ marginTop:8, padding:'6px 8px', background:'var(--bg-panel)', borderRadius:4, display:'flex', gap:6, alignItems:'center' }}>
-              <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-muted)' }}>Orient:</span>
-              <button onClick={()=>setRotateOrient('h')} style={{ flex:1, background: rotateOrient==='h' ? activeColor+'33' : 'var(--bg-surface)', border:`1px solid ${rotateOrient==='h' ? activeColor : 'var(--border-subtle)'}`, color: rotateOrient==='h' ? activeColor : 'var(--text-secondary)', borderRadius:3, padding:'3px 8px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>↔ H</button>
-              <button onClick={()=>setRotateOrient('v')} style={{ flex:1, background: rotateOrient==='v' ? activeColor+'33' : 'var(--bg-surface)', border:`1px solid ${rotateOrient==='v' ? activeColor : 'var(--border-subtle)'}`, color: rotateOrient==='v' ? activeColor : 'var(--text-secondary)', borderRadius:3, padding:'3px 8px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>↕ V</button>
-            </div>
-          )}
-          {activeTool==='gadget' && (
-            <div style={{ marginTop:8 }}>
-              <div className="sidebar-section-title" style={{ marginBottom:6 }}>Choose Gadget</div>
-              <div style={{ display:'flex', gap:3, marginBottom:6 }}>
-                {[{id:'all',label:'All'},{id:'utility',label:'Utility'},{id:'attack',label:'⚔ ATK'},{id:'defend',label:'🛡 DEF'}].map(c => (
-                  <button key={c.id} onClick={()=>setGadgetCat(c.id)}
-                    style={{ flex:1, background: gadgetCat===c.id ? activeColor+'33' : 'var(--bg-panel)', border:`1px solid ${gadgetCat===c.id ? activeColor : 'var(--border-subtle)'}`, color: gadgetCat===c.id ? activeColor : 'var(--text-secondary)', borderRadius:3, padding:'3px 4px', cursor:'pointer', fontSize:10, fontFamily:'var(--font-display)', fontWeight:700 }}>
-                    {c.label}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:4, maxHeight:280, overflowY:'auto' }}>
-                {ALL_GADGETS.filter(g => gadgetCat==='all' || g.category===gadgetCat).map(g => (
-                  <div key={g.id} draggable title={`${g.label} (drag onto the map)`}
-                    style={{ aspectRatio:'1', background:'var(--bg-panel)', border:'1px solid var(--border-subtle)', borderRadius:4, padding:3, cursor:'grab', display:'flex', alignItems:'center', justifyContent:'center' }}
-                    onDragStart={(e) => {
-                      e.dataTransfer.effectAllowed = 'copy';
-                      e.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget: g, color: activeColor }));
-                      e.dataTransfer.setDragImage(makeDragGhost(g.icon, activeColor), 22, 22);
-                      const d = { gadget: g, color: activeColor };
-                      draggingRef.current = d; setDraggingGadget(d);
-                    }}
-                    onDragEnd={() => { draggingRef.current = null; setDraggingGadget(null); setDragPreview(null); }}>
-                    <img src={g.icon} alt={g.label} style={{ width:'100%', height:'100%', objectFit:'contain' }}/>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop:6, padding:'4px 8px', background:'rgba(80,232,160,0.08)', border:'1px solid rgba(80,232,160,0.35)', borderRadius:3, fontSize:11, color:'#50E8A0', fontFamily:'var(--font-mono)', lineHeight:1.5 }}>
-                ↕ Drag a gadget from the grid onto the map
-              </div>
-            </div>
-          )}
-        </div>
+        <ToolPalette
+          tools={DRAW_TOOLS}
+          activeTool={activeTool}
+          activeColor={activeColor}
+          reinforcementCount={reinforceCount}
+          rotateOrientation={rotateOrient}
+          gadgetCategory={gadgetCat}
+          gadgets={ALL_GADGETS}
+          onSelectTool={handleToolSelect}
+          onRotateOrientation={setRotateOrient}
+          onGadgetCategory={setGadgetCat}
+          onGadgetDragStart={handleGadgetDragStart}
+          onGadgetDragEnd={handleGadgetDragEnd}
+        />
 
-        <div className="sidebar-section">
-          <div className="sidebar-section-title" style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span>Color</span>
-            <label title="Pick custom color" style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:4 }}>
-              <span style={{ fontSize:10, color:'var(--text-muted)', fontFamily:'var(--font-mono)' }}>CUSTOM</span>
-              <div style={{ width:20, height:20, borderRadius:'50%', background: activeColor, border:'2px solid var(--border-accent)', overflow:'hidden', flexShrink:0 }}>
-                <input type="color" value={activeColor} onChange={e => setActiveColor(e.target.value)}
-                  style={{ opacity:0, width:'200%', height:'200%', cursor:'pointer', marginLeft:'-50%', marginTop:'-50%' }}/>
-              </div>
-            </label>
-          </div>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
-            {EXTENDED_COLORS.map(c => (
-              <div key={c} onClick={() => setActiveColor(c)}
-                style={{ width:18, height:18, borderRadius:'50%', background:c, cursor:'pointer', flexShrink:0,
-                  border: activeColor===c ? '2px solid white' : '2px solid transparent',
-                  boxShadow: activeColor===c ? `0 0 6px ${c}` : 'none',
-                  transform: activeColor===c ? 'scale(1.25)' : 'scale(1)', transition:'transform 0.1s' }}/>
-            ))}
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-title">Stroke width</div>
-          <input type="range" min="1" max="10" value={strokeWidth} onChange={e=>setStrokeWidth(Number(e.target.value))} className="stroke-slider"/>
-          <div style={{fontSize:11,color:'var(--text-muted)',marginTop:4}}>{strokeWidth}px</div>
-        </div>
-
-        <div className="sidebar-section" style={{flex:1}}>
-          <div className="sidebar-section-title">Operators — {side==='attack'?'⚔ ATK':'🛡 DEF'}</div>
-          <input className="op-search" placeholder="Search operator..." value={opSearch} onChange={e=>setOpSearch(e.target.value)}/>
-          <div className="op-list">
-            {filteredOps.map(op => (
-              <div key={op.id} className="op-item"
-                draggable={false}
-                style={{ cursor:'grab', userSelect:'none', background: pendingOp?.id===op.id ? activeColor+'22' : undefined, border: pendingOp?.id===op.id ? `1px solid ${activeColor}55` : undefined }}
-                title="Drag onto the map"
-                onDragStart={e => e.preventDefault()}
-                onMouseDown={e => {
-                  if (e.button !== 0) return;
-                  e.preventDefault();
-                  const drag = { op, color: activeColor };
-                  opDragRef.current = drag;
-                  setOpDrag({ ...drag, clientX: e.clientX, clientY: e.clientY });
-                }}>
-                <OpIcon op={op} color={activeColor}/>
-                <div className="op-info"><div className="op-name">{op.name}</div><div className="op-role">{op.role}</div></div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {activeTool==='operator' && (
-          <div className="sidebar-section" style={{background:'rgba(80,232,160,0.08)',borderColor:'rgba(80,232,160,0.35)'}}>
-            <div style={{fontSize:11,color:'#50E8A0',fontFamily:'var(--font-mono)',lineHeight:1.5}}>↕ Drag operator cards from the list onto the map</div>
-          </div>
-        )}
-        {activeTool==='route' && (
-          <div className="sidebar-section" style={{background:'rgba(232,184,75,0.08)',borderColor:'rgba(232,184,75,0.35)'}}>
-            <div style={{fontSize:11,color:'var(--accent-gold)',fontFamily:'var(--font-mono)',lineHeight:1.6}}>
-              Click to set waypoints · Double-click or Enter to finish · Backspace = undo point · Esc = cancel
-            </div>
-          </div>
-        )}
+        <StylePalette
+          activeColor={activeColor}
+          colors={EXTENDED_COLORS}
+          strokeWidth={strokeWidth}
+          onColor={setActiveColor}
+          onStrokeWidth={setStrokeWidth}
+        />
+        <OperatorPalette
+          activeTool={activeTool}
+          activeColor={activeColor}
+          side={side}
+          search={opSearch}
+          operators={filteredOps}
+          pendingOperator={pendingOp}
+          onSearch={setOpSearch}
+          onOperatorMouseDown={handleOperatorMouseDown}
+        />
       </aside>
 
       <CollabBar collab={collab} room={room} onStart={startCollab} onJoin={joinCollab} onLeave={leaveCollab} onToast={showToast} />
@@ -1456,7 +1185,21 @@ export default function EditorPage() {
           const d = draggingRef.current;
           if (d) {
             const pt = toCanvas(e.clientX, e.clientY);
-            setDragPreview({ ...d, x: pt.x, y: pt.y });
+            const gadget = (d.gadget && GADGETS[d.gadget.id]) || d.gadget;
+            const nearest = gadget ? findNearestGadgetMarker(gadget, pt, interactiveWalls) : null;
+            if (nearest) {
+              const slot = getNextAttachmentSlot(elements, nearest.marker.id);
+              const slotSpacingScale = Math.max(
+                1,
+                ...elements
+                  .filter(element => element.type === 'gadget' && element.wallId === nearest.marker.id)
+                  .map(element => element.scale || 1)
+              );
+              const position = getAttachedGadgetPosition(nearest.marker, { slot, slotSpacingScale });
+              setDragPreview({ ...d, gadget, ...position, anchor:nearest.marker });
+            } else {
+              setDragPreview({ ...d, gadget, x:pt.x, y:pt.y, invalid:requiresMarker(gadget) });
+            }
           }
         }}
         onDragLeave={() => setDragPreview(null)}
@@ -1480,26 +1223,6 @@ export default function EditorPage() {
             const g = (rawG && GADGETS[rawG.id]) || rawG;
             const c = gadgetPayload?.color  || draggingRef.current?.color || draggingGadget?.color || activeColor;
             if (g) {
-              // Opening-only gadgets: snap to nearest door/window marker
-              if (g.placement === 'opening') {
-                const openings = interactiveWalls.filter(w => w.type === 'door' || w.type === 'window');
-                const nearest = openings.reduce((best, w) => {
-                  const d = Math.hypot(w.x - pt.x, w.y - pt.y);
-                  return (!best || d < best.d) ? { w, d } : best;
-                }, null);
-                if (!nearest || nearest.d > 8) {
-                  showToast(`${g.label} can only be placed on doors/windows`);
-                  setDraggingGadget(null); setDragPreview(null);
-                  return;
-                }
-                const snap = nearest.w;
-                setElements(prev => {
-                  const filtered = prev.filter(el => !(el.wallId === snap.id && el.type === 'gadget'));
-                  return [...filtered, { id: Date.now(), type: 'gadget', wallId: snap.id, gadget: g, x: snap.x, y: snap.y, color: c, floor: selectedFloor, mapId: selectedMap }];
-                });
-                setDraggingGadget(null); setDragPreview(null);
-                return;
-              }
               const placed = elements.filter(el => el.type==='gadget' && el.gadget?.id===g.id && el.color===c && (!el.mapId || el.mapId===selectedMap)).length;
               // Lineup-aware limit: if player has an operator, only allow gadgets from their loadout
               const player = lineup.find(p => p.color === c);
@@ -1518,7 +1241,24 @@ export default function EditorPage() {
               if (placed >= limit) {
                 showToast(`Limit reached: ${limit}× ${g.label}`);
               } else {
-                setElements(prev => [...prev, { id: Date.now(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, floor: selectedFloor, mapId: selectedMap }]);
+                const nearest = findNearestGadgetMarker(g, pt, interactiveWalls);
+                if (requiresMarker(g) && !nearest) {
+                  const types = g.markerTypes || [];
+                  const acceptsWalls = types.some(type => type === 'wall' || type === 'softwall');
+                  const acceptsOpenings = types.some(type => type === 'door' || type === 'window' || type === 'hatch');
+                  const target = acceptsWalls && acceptsOpenings
+                    ? 'marked walls, doors, windows or hatches'
+                    : g.placement === 'opening'
+                      ? 'marked doors, windows or hatches'
+                      : 'marked walls';
+                  showToast(`${g.label} can only be placed on ${target}`);
+                } else if (nearest) {
+                  setElements(previous => upsertAttachedGadget(previous, nearest.marker, g, c, {
+                    floor:selectedFloor, mapId:selectedMap,
+                  }));
+                } else {
+                  setElements(prev => [...prev, { id: Date.now(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, floor: selectedFloor, mapId: selectedMap }]);
+                }
               }
             }
           }
@@ -1578,9 +1318,18 @@ export default function EditorPage() {
                     showToast={showToast} selectedFloor={selectedFloor} selectedMap={selectedMap}
                     pendingGadget={
                       (activeTool === 'gadget' ? pendingGadget : null) ||
-                      (draggingGadget?.gadget?.placement === 'opening' ? draggingGadget.gadget : null)
+                      (draggingGadget?.gadget && (
+                        draggingGadget.gadget.placement === 'opening' || supportsWallAttachment(draggingGadget.gadget)
+                      ) ? draggingGadget.gadget : null)
                     }
                     imgAspect={imgAspect}
+                    selectedIds={selectedIds}
+                    onSelectElement={(id, additive) => setSelectedIds(previous => {
+                      if (!additive) return [id];
+                      return previous.includes(id)
+                        ? previous.filter(selectedId => selectedId !== id)
+                        : [...previous, id];
+                    })}
                     onHoverChange={id => { hoveredWallIdRef.current = id; }}/>
                 ))}
                 {visibleElements.map(el => {
@@ -1636,7 +1385,7 @@ export default function EditorPage() {
                 )}
                 {/* Drag preview */}
                 {dragPreview && (() => {
-                  const { x, y, op, gadget, color } = dragPreview;
+                  const { x, y, op, gadget, color, anchor, invalid } = dragPreview;
                   if (op) {
                     const sz = 36;
                     return (
@@ -1649,10 +1398,12 @@ export default function EditorPage() {
                     );
                   }
                   if (gadget) {
-                    const gs = 3.4;
+                    const gs = anchor ? ATTACHED_GADGET_SIZE : 3.4;
+                    const previewColor = invalid ? '#E84B4B' : color;
                     return (
                       <g style={{ pointerEvents:'none', opacity:0.75 }}>
-                        <rect x={`${x-gs/2}%`} y={`${y-gs/2}%`} width={`${gs}%`} height={`${gs}%`} fill="rgba(8,10,14,0.85)" stroke={color} strokeWidth="1.5" rx="0.6"/>
+                        {anchor && <line x1={`${anchor.x}%`} y1={`${anchor.y}%`} x2={`${x}%`} y2={`${y}%`} stroke={previewColor} strokeWidth="1.1" strokeDasharray="2 1.2" strokeLinecap="round"/>}
+                        <rect x={`${x-gs/2}%`} y={`${y-gs/2}%`} width={`${gs}%`} height={`${gs}%`} fill="rgba(8,10,14,0.85)" stroke={previewColor} strokeWidth="1.5" strokeDasharray={invalid ? '2 1' : undefined} rx="0.6"/>
                         {gadget.icon && <image href={gadget.icon} x={`${x-gs/2+0.3}%`} y={`${y-gs/2+0.3}%`} width={`${gs-0.6}%`} height={`${gs-0.6}%`}/>}
                       </g>
                     );
@@ -1669,14 +1420,13 @@ export default function EditorPage() {
                 )}
               </svg>
               {textInput.active && (
-                <div style={{position:'absolute',left:`${textInput.x}%`,top:`${textInput.y}%`,transform:'translate(-50%,-50%)',zIndex:100}}>
-                  <input autoFocus value={textInput.val}
-                    onChange={e=>setTextInput(t=>({...t,val:e.target.value}))}
-                    onKeyDown={e=>{if(e.key==='Enter')submitText();if(e.key==='Escape')setTextInput({active:false});}}
-                    onBlur={submitText}
-                    style={{background:'rgba(8,10,14,0.92)',border:`1px solid ${activeColor}`,color:activeColor,fontFamily:'var(--font-mono)',fontSize:14,padding:'4px 8px',borderRadius:4,outline:'none',minWidth:120}}
-                    placeholder="Text + Enter..."/>
-                </div>
+                <CanvasTextInput
+                  clientX={textInput.clientX} clientY={textInput.clientY}
+                  value={textInput.val} color={activeColor}
+                  onChange={value => setTextInput(current => ({ ...current, val:value }))}
+                  onSubmit={submitText}
+                  onCancel={() => setTextInput({ active:false, x:0, y:0, val:'' })}
+                />
               )}
             </div>
           </div>
@@ -1707,12 +1457,31 @@ export default function EditorPage() {
         {selectedIds.length === 1 && (() => {
           const sel = visibleElements.find(e => e.id === selectedIds[0]);
           if (!sel) return null;
-          const sizable = ['gadget','reinforcement','barricade','rotate','headline','feetline','operator'].includes(sel.type);
+          const sizable = ['gadget','reinforcement','barricade','rotate','headline','feetline','verticalholes','operator'].includes(sel.type);
           if (!sizable) return null;
           const label = sel.type === 'gadget' ? (sel.gadget?.label || 'Gadget')
                        : sel.type === 'operator' ? (sel.op?.name || 'Operator')
+                       : sel.type === 'verticalholes' ? 'Vertical Holes'
                        : sel.type[0].toUpperCase() + sel.type.slice(1);
           const scale = sel.scale ?? 1;
+          const attachmentMarker = sel.wallId
+            ? interactiveWalls.find(marker => marker.id === sel.wallId)
+            : null;
+          const applyScale = next => setElements(prev => {
+            const updated = prev.map(element => element.id === sel.id ? { ...element, scale:next } : element);
+            return sel.type === 'gadget' && attachmentMarker
+              ? layoutAttachedGadgets(updated, attachmentMarker)
+              : updated;
+          });
+          const changeAttachmentSide = nextSide => {
+            if (!attachmentMarker) return;
+            setElements(prev => {
+              const updated = prev.map(element => element.id === sel.id
+                ? { ...element, attachmentSide:nextSide }
+                : element);
+              return layoutAttachedGadgets(updated, attachmentMarker);
+            });
+          };
           return (
             <div className="sidebar-section" style={{ borderBottom: '2px solid var(--accent-gold)' }}>
               <div className="sidebar-section-title" style={{ color: 'var(--accent-gold)' }}>⚙ {label}</div>
@@ -1720,20 +1489,55 @@ export default function EditorPage() {
                 GRÖSSE — {Math.round(scale * 100)}%
               </div>
               <input type="range" min="0.3" max="3" step="0.05" value={scale}
-                onChange={e => {
-                  const next = Number(e.target.value);
-                  setElements(prev => prev.map(p => p.id === sel.id ? { ...p, scale: next } : p));
-                }}
+                onChange={e => applyScale(Number(e.target.value))}
                 style={{ width:'100%', accentColor:'var(--accent-gold)' }} />
               <div style={{ display:'flex', gap:4, marginTop:6 }}>
                 {[0.5, 1, 1.5, 2].map(v => (
                   <button key={v}
-                    onClick={() => setElements(prev => prev.map(p => p.id === sel.id ? { ...p, scale: v } : p))}
+                    onClick={() => applyScale(v)}
                     style={{ flex:1, background: Math.abs((sel.scale ?? 1) - v) < 0.04 ? 'var(--accent-gold)' : 'var(--bg-panel)', color: Math.abs((sel.scale ?? 1) - v) < 0.04 ? 'var(--bg-void)' : 'var(--text-secondary)', border:'1px solid var(--border-subtle)', borderRadius:3, padding:'3px 6px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>
                     {v}×
                   </button>
                 ))}
               </div>
+              {sel.type === 'gadget' && (
+                <>
+                  <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:12, marginBottom:4 }}>
+                    AUSRICHTUNG — {sel.rotation || 0}°
+                  </div>
+                  <div style={{ display:'flex', gap:4 }}>
+                    {[0, 90, 180, 270].map(degrees => (
+                      <button key={degrees}
+                        onClick={() => setElements(prev => prev.map(element => element.id === sel.id ? { ...element, rotation:degrees } : element))}
+                        style={{ flex:1, background:(sel.rotation || 0) === degrees ? 'var(--accent-gold)' : 'var(--bg-panel)', color:(sel.rotation || 0) === degrees ? 'var(--bg-void)' : 'var(--text-secondary)', border:'1px solid var(--border-subtle)', borderRadius:3, padding:'4px 3px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:10, fontWeight:700 }}>
+                        {degrees}°
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {sel.type === 'gadget' && attachmentMarker && (() => {
+                const horizontal = attachmentMarker.horizontal !== false;
+                const currentSide = sel.attachmentSide ?? getDefaultAttachmentSide(attachmentMarker);
+                const sides = horizontal
+                  ? [{ value:-1, label:'Oben' }, { value:1, label:'Unten' }]
+                  : [{ value:-1, label:'Links' }, { value:1, label:'Rechts' }];
+                return (
+                  <>
+                    <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:12, marginBottom:4 }}>
+                      WANDSEITE
+                    </div>
+                    <div style={{ display:'flex', gap:4 }}>
+                      {sides.map(option => (
+                        <button key={option.value} onClick={() => changeAttachmentSide(option.value)}
+                          style={{ flex:1, background:currentSide === option.value ? 'var(--accent-gold)' : 'var(--bg-panel)', color:currentSide === option.value ? 'var(--bg-void)' : 'var(--text-secondary)', border:'1px solid var(--border-subtle)', borderRadius:3, padding:'5px 6px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           );
         })()}
@@ -1788,7 +1592,7 @@ export default function EditorPage() {
         />
       )}
 
-      <Toast msg={toast}/>
+      <EditorToast message={toast}/>
 
       {/* Lineup Picker Modal */}
       {lineupPickerOpen && (() => {

@@ -1,6 +1,6 @@
 [package]
 name = "clav-strats"
-version = "1.0.1"
+version = "1.0.2"
 description = "Clav.Strats — Rainbow Six Siege strategy builder"
 authors = ["Clav Academy"]
 edition = "2021"
@@ -20,6 +20,13 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt", "sync", "time"] }
+url = "2"
+warp = "0.3"
+yrs = { version = "0.24", features = ["sync"] }
+yrs-warp = "0.9"
 
 [profile.release]
 panic = "abort"

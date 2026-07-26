@@ -1,6 +1,6 @@
 {
   "name": "clav-strats",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "public/electron.js",
   "homepage": "./",
@@ -24,10 +24,12 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "test": "react-scripts test",
     "electron": "electron .",
     "collab": "node collab/server.js",
     "dist": "react-scripts build && electron-builder --win --x64",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "verify:updater": "node scripts/verify-updater-release.mjs"
   },
   "build": {
     "appId": "com.clavstrats.app",

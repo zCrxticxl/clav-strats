@@ -1,6 +1,6 @@
 name: release
 
-# Builds, signs and publishes a Tauri release whenever you push a tag like v1.0.1.
+# Builds, signs and publishes a Tauri release whenever you push a tag like v1.0.2.
 # GitHub does the whole build + sign + upload + latest.json generation for you.
 on:
   push:
@@ -13,19 +13,20 @@ jobs:
       contents: write
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build & publish release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           # react-scripts treats lint warnings as build errors when CI=true
           # (GitHub sets it). Keep the release build from failing on warnings.
@@ -40,4 +41,8 @@ jobs:
           releaseBody: "Download the setup .exe below to install. Existing installs update automatically."
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+      - name: Verify published updater release
+        run: npm run verify:updater -- --expect-version "${{ github.ref_name }}"

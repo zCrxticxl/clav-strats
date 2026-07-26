@@ -1,133 +1,100 @@
-# Live Collaboration (Yjs)
+# Live Collaboration
 
-Real-time co-editing of a strat: multiple people draw on the same blueprint in
-parallel, with live cursors and presence. Built on **Yjs (CRDT)** + a
-self-hosted **y-websocket** server. Access is between Electron desktop clients
-via a `clavstrats://join/<room>` deep link.
+Clav.Strats can host a temporary live-editing session directly from the Tauri
+desktop app. The host does not need to start a terminal, configure a server,
+open a router port, or manually copy a tunnel URL.
+
+## Normal workflow
+
+1. Open a strategy in the Tauri desktop app.
+2. Click **Start Live Collab**.
+3. Wait until the status changes to **live**.
+4. Click **Share code** and send the copied invitation code.
+5. The teammate opens Clav.Strats, pastes the complete code into
+   **invite code**, and clicks **Join**.
+
+The invitation contains both the random room id and the temporary encrypted
+WebSocket endpoint. The teammate does not need to change any server setting.
+
+## What starts automatically
+
+The host app starts:
+
+- an embedded, Yjs-compatible WebSocket server bound only to `127.0.0.1` on a
+  random free port;
+- a Cloudflare Quick Tunnel that exposes that local server through a temporary
+  `wss://*.trycloudflare.com` endpoint.
+
+If `cloudflared` is already installed, the app uses it. Otherwise, the Windows
+app downloads the official executable from Cloudflare's GitHub release on the
+first session and caches it under the app's local data directory. The tunnel
+process and embedded server stop when the host leaves the session or exits the
+app.
+
+No inbound firewall rule or router port forwarding is required. The host must
+keep Clav.Strats open while teammates are connected.
 
 ## Architecture
 
+```text
+Host Tauri app
+  ├─ embedded yrs-warp server on 127.0.0.1:<random>
+  └─ cloudflared Quick Tunnel
+       └─ wss://<random>.trycloudflare.com
+            ├─ host Yjs client
+            └─ teammate Yjs clients
 ```
-Electron client A ─┐                     ┌─ Y.Doc (elements / lineups / meta)
-Electron client B ─┼── wss:// ── nginx ──┤   awareness (cursors / presence)
-Electron client C ─┘         (TLS)       └─ collab/server.js  (node + ws)
+
+Shared Yjs maps:
+
+- `elements`: strategy canvas elements keyed by element id;
+- `lineups`: lineups keyed by map/side context;
+- `meta`: strategy name, side, floor, map, description, and tags;
+- awareness: names, cursors, selected tool, and online presence.
+
+## Invitation format
+
+New invitations start with `CLAV1.` and contain a versioned Base64URL payload:
+
+```json
+{ "v": 1, "r": "<room>", "s": "wss://<tunnel>.trycloudflare.com" }
 ```
 
-- `collab/server.js` — standalone y-websocket server, one `Y.Doc` per room.
-- `src/hooks/useCollab.js` — client: connects, exposes shared maps + presence.
-- `src/pages/EditorPage.js` — two-way sync of `elements`, `lineupsByContext`
-  and meta (name/side/floor/map/tags) into Yjs; broadcasts the local cursor.
-- `public/electron.js` — registers the `clavstrats://` protocol + single-instance
-  handling so an invite link opens the room in the running app.
+Legacy raw room codes and old `clavstrats://join/<room>` values are still
+accepted, but they use the locally configured/default collaboration server.
 
-Shared state model: `elements` is a `Y.Map` keyed by element id (per-element
-CRDT, so two people editing different elements never clobber each other).
+## Browser development fallback
 
-## 1. Install deps
+Automatic hosting requires Tauri because a browser cannot launch local
+processes. Browser-only development can still use the standalone Node server:
 
 ```bash
-npm install          # pulls yjs, y-websocket, ws
-```
-
-## 2. Run the collab server
-
-Local test:
-
-```bash
-npm run collab       # ws://localhost:1234
-```
-
-On your VPS (persistent, behind TLS):
-
-```bash
-# systemd unit: /etc/systemd/system/clav-collab.service
-[Unit]
-Description=Clav.Strats collab server
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/clav-strats
-ExecStart=/usr/bin/node collab/server.js
-Environment=PORT=1234
-Restart=always
-User=clav
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now clav-collab
-```
-
-nginx TLS termination → ws upstream:
-
-```nginx
-server {
-  listen 443 ssl;
-  server_name collab.clav-strats.com;
-
-  ssl_certificate     /etc/letsencrypt/live/collab.clav-strats.com/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/collab.clav-strats.com/privkey.pem;
-
-  location / {
-    proxy_pass http://127.0.0.1:1234;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 3600s;
-  }
-}
-```
-
-## 3. Point the client at the server
-
-The client reads `REACT_APP_COLLAB_URL` at build time. Default is
-`ws://localhost:1234`. For production:
-
-```bash
-# .env  (project root, picked up by react-scripts)
-REACT_APP_COLLAB_URL=wss://collab.clav-strats.com
-```
-
-Then rebuild: `npm run build` (or `npm run dist` for the packaged app).
-
-## 4. Use it
-
-1. Open a strat in the editor.
-2. Click **👥 Live-Collab starten** (top-right bar). A room id is added to the URL.
-3. Click **🔗 Invite** — the `clavstrats://join/<room>` link is copied.
-4. Send it to teammates. Opening it launches/focuses their Clav.Strats app and
-   joins the room. Everyone sees the same board, live cursors and presence.
-5. **✕** leaves the session (goes back to solo/local editing).
-
-## Testing locally with two clients
-
-```bash
-# terminal 1
 npm run collab
-# terminal 2
-npm start                 # http://localhost:3000
+npm start
 ```
 
-Open two browser windows on `http://localhost:3000/#/editor?room=test123`
-(deep links only work in the packaged Electron app; in the browser just share
-the `?room=` URL). Draw in one — it appears in the other in real time.
+Then open two browser windows with the same room query, for example:
 
-## Notes / limits
+```text
+http://localhost:3000/#/editor?room=test-room
+```
 
-- **Persistence:** rooms live in server memory only. When the last peer leaves
-  and GC runs, the doc is dropped. Each client still auto-saves its own copy to
-  localStorage, and you can JSON-export from the Library. For durable rooms, add
-  `y-leveldb` persistence to `collab/server.js`.
-- **Undo** stays local per user during a session (remote edits don't pollute
-  your undo stack).
-- **Element z-order** follows Y.Map insertion order; deleting + re-adding an
-  element can shift its layer. Fine for tactical drawings; revisit if it bites.
-- **Auth:** the server accepts any room id. Room ids are random and unguessable,
-  but there is no login — anyone with the link can edit. Add a token check in
-  `server.js` if you need access control.
-- **End-to-end multiplayer was not run in this environment** (needs the VPS +
-  two clients). Code compiles and the sync logic is guarded against the
-  empty-joiner-wipes-doc race, but do a two-client smoke test before relying on it.
+## Limits and security
+
+- Cloudflare Quick Tunnels are temporary and have no uptime guarantee. A new
+  public endpoint is generated for every hosted session.
+- Anyone who has the invitation code can edit that room while the host is
+  online. Invitation codes should only be sent to intended teammates.
+- Room state lives in memory on the host. Each client still auto-saves its own
+  local copy of the strategy.
+- The embedded server listens on loopback only; it is not directly exposed to
+  the LAN or internet.
+
+## Verification
+
+```bash
+npm test -- --watchAll=false
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml quick_tunnel_syncs_two_yjs_clients_through_the_embedded_server -- --ignored
+```

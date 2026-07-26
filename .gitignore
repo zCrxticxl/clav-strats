@@ -13,6 +13,15 @@
 *.key
 .tauri/
 
+# local AI assistant context
+**/AGENTS.md
+**/AI_CONTRACT.md
+**/CLAUDE.md
+**/codex.md
+**/PROJECT_CONTEXT.md
+**/.claude/
+**/.codex/
+
 # misc
 .env.local
 .DS_Store

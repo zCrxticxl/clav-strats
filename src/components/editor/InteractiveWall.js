@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import { GADGETS } from '../../data/gadgets';
+import {
+  ATTACHED_GADGET_SIZE, getAttachedGadgetPosition, getDefaultAttachmentSide,
+  markerSupportsGadget, upsertAttachedGadget,
+} from '../../utils/gadgetPlacement';
+import { recolorElements } from '../../utils/elementColor';
 
 export const WALL_COLORS = {
   wall: '#E8B84B',
@@ -9,13 +13,16 @@ export const WALL_COLORS = {
   softwall: '#B04BE8',
 };
 
-// Derived automatically from gadgets with placement: 'opening'
-export const OPENING_GADGETS = new Set(
-  Object.values(GADGETS).filter(g => g.placement === 'opening').map(g => g.id)
-);
-
-export function InteractiveWall({ w, activeTool, activeColor, elements, setElements, reinforceCount, showToast, selectedFloor, selectedMap, onHoverChange, pendingGadget, imgAspect }) {
-  const existing = elements.find(e => e.wallId === w.id);
+export function InteractiveWall({
+  w, activeTool, activeColor, elements, setElements, reinforceCount, showToast,
+  selectedFloor, selectedMap, onHoverChange, pendingGadget, imgAspect,
+  selectedIds = [], onSelectElement,
+}) {
+  const reinforcementOnMarker = elements.find(e => e.wallId === w.id && e.type === 'reinforcement');
+  const barricadeOnMarker = elements.find(e => e.wallId === w.id && e.type === 'barricade');
+  const gadgetsOnMarker = elements.filter(e => e.wallId === w.id && e.type === 'gadget');
+  const gadgetOnMarker = gadgetsOnMarker[0];
+  const clickedElement = reinforcementOnMarker || barricadeOnMarker || gadgetOnMarker;
   const [hovered, setHovered] = useState(false);
 
   const handleContextMenu = (e) => {
@@ -31,23 +38,28 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
   const handleClick = (e) => {
     e.stopPropagation();
 
-    if (activeTool === 'eraser' && existing) {
+    if (activeTool === 'select' && clickedElement?.color && clickedElement.color !== activeColor) {
+      setElements(prev => recolorElements(prev, [clickedElement.id], activeColor));
+      return;
+    }
+
+    if (activeTool === 'eraser' && clickedElement) {
       setElements(prev => prev.filter(el => el.wallId !== w.id));
       return;
     }
     if (activeTool === 'reinforcement' && (w.type === 'wall' || w.type === 'hatch')) {
-      if (existing?.type === 'reinforcement') {
+      if (reinforcementOnMarker) {
         // Different color → reassign to that player. Same color → toggle orientation.
-        if (existing.color !== activeColor) {
-          setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, color: activeColor } : el));
+        if (reinforcementOnMarker.color !== activeColor) {
+          setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'reinforcement' ? { ...el, color: activeColor } : el));
         } else {
-          setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, horizontal: !el.horizontal } : el));
+          setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'reinforcement' ? { ...el, horizontal: !el.horizontal } : el));
         }
         return;
       }
       if (reinforceCount >= 10) { showToast('Max 10 Reinforcements!'); return; }
       setElements(prev => {
-        const filtered = prev.filter(el => el.wallId !== w.id);
+        const filtered = prev.filter(el => !(el.wallId === w.id && el.type === 'reinforcement'));
         return [...filtered, {
           id: Date.now(), type: 'reinforcement', wallId: w.id,
           x: w.x, y: w.y, w: w.w, h: w.h,
@@ -58,37 +70,23 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
       });
       return;
     }
-    if (pendingIsOpeningGadget && isOpening && pendingGadget) {
-      const gadgetEl = elements.find(e => e.wallId === w.id && e.type === 'gadget');
-      if (gadgetEl) {
-        if (gadgetEl.gadget?.id === pendingGadget.id && gadgetEl.color === activeColor) {
-          // Same gadget + same color → remove (toggle off)
-          setElements(prev => prev.filter(el => el.wallId !== w.id || el.type !== 'gadget'));
-        } else {
-          // Different color or gadget → reassign to this player / swap gadget
-          setElements(prev => prev.map(el => (el.wallId === w.id && el.type === 'gadget')
-            ? { ...el, gadget: pendingGadget, color: activeColor } : el));
-        }
-      } else {
-        setElements(prev => [...prev, {
-          id: Date.now(), type: 'gadget', wallId: w.id,
-          gadget: pendingGadget, x: w.x, y: w.y,
-          color: activeColor, floor: selectedFloor, mapId: selectedMap,
-        }]);
-      }
+    if (pendingCanAttach && pendingGadget) {
+      setElements(prev => upsertAttachedGadget(prev, w, pendingGadget, activeColor, {
+        floor:selectedFloor, mapId:selectedMap,
+      }));
       return;
     }
     if (activeTool === 'barricade' && isOpening) {
-      if (existing?.type === 'barricade') {
-        if (existing.color === activeColor) {
-          setElements(prev => prev.filter(el => el.wallId !== w.id));
+      if (barricadeOnMarker) {
+        if (barricadeOnMarker.color === activeColor) {
+          setElements(prev => prev.filter(el => !(el.wallId === w.id && el.type === 'barricade')));
         } else {
-          setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, color: activeColor } : el));
+          setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'barricade' ? { ...el, color: activeColor } : el));
         }
         return;
       }
       setElements(prev => {
-        const filtered = prev.filter(el => el.wallId !== w.id);
+        const filtered = prev.filter(el => !(el.wallId === w.id && el.type === 'barricade'));
         return [...filtered, {
           id: Date.now(), type: 'barricade', wallId: w.id,
           x: w.x, y: w.y, w: w.w, h: w.h,
@@ -99,21 +97,22 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
   };
 
   const baseColor  = WALL_COLORS[w.type] || '#888';
-  const hasReinforce = existing?.type === 'reinforcement';
-  const hasBarricade = existing?.type === 'barricade';
+  const hasReinforce = !!reinforcementOnMarker;
+  const hasBarricade = !!barricadeOnMarker;
   const isHatch = w.type === 'hatch';
   const isWall  = w.type === 'wall';
   const isDoor  = w.type === 'door';
   const isWin   = w.type === 'window';
   const isSoft  = w.type === 'softwall';
-  const gadgetOnOpening = (isDoor || isWin) ? elements.find(e => e.wallId === w.id && e.type === 'gadget') : null;
+  const gadgetOnOpening = (isDoor || isWin) ? gadgetsOnMarker.length > 0 : false;
 
   const isOpening = isDoor || isWin;
-  const pendingIsOpeningGadget = activeTool === 'gadget' && pendingGadget?.placement === 'opening';
+  const pendingCanAttach = activeTool === 'gadget' && markerSupportsGadget(pendingGadget, w);
   const canInteract =
     (activeTool === 'reinforcement' && (isWall || isHatch)) ||
     (activeTool === 'barricade'     && isOpening)           ||
-    (pendingIsOpeningGadget         && isOpening)           ||
+    pendingCanAttach                                       ||
+    (activeTool === 'select' && !!clickedElement) ||
     activeTool === 'eraser';
 
   const hoverStyle = {
@@ -129,6 +128,32 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
   const ar       = imgAspect || 1.5;
   const doorW    = w.horizontal ? (3.4 / ar) : 1.6;
   const doorH    = w.horizontal ? 1.6 : (3.4 * ar);
+  const attachedSlotSpacingScale = Math.max(1, ...gadgetsOnMarker.map(element => element.scale || 1));
+  const handleGadgetClick = (e, gadgetElement) => {
+    if (!gadgetElement) return;
+    if (activeTool === 'eraser') {
+      e.stopPropagation();
+      setElements(prev => prev.filter(el => el.id !== gadgetElement.id));
+      return;
+    }
+    if (gadgetElement.color !== activeColor) {
+      e.stopPropagation();
+      setElements(prev => recolorElements(prev, [gadgetElement.id], activeColor));
+      onSelectElement?.(gadgetElement.id, false);
+      return;
+    }
+    if (pendingCanAttach && pendingGadget) {
+      e.stopPropagation();
+      setElements(prev => upsertAttachedGadget(prev, w, pendingGadget, activeColor, {
+        floor:selectedFloor, mapId:selectedMap,
+      }));
+      return;
+    }
+    if (activeTool === 'select') {
+      e.stopPropagation();
+      onSelectElement?.(gadgetElement.id, e.shiftKey);
+    }
+  };
 
   return (
     <g
@@ -155,7 +180,7 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
                 x={`${w.x - wallW/2}%`} y={`${w.y - wallH/2}%`}
                 width={`${wallW}%`} height={`${wallH}%`}
                 fill={`url(#${pid})`}
-                stroke={existing.color}
+                stroke={reinforcementOnMarker.color}
                 strokeWidth="1.5"
                 strokeDasharray={isSoft ? '3 2' : undefined}
                 rx="0.4"
@@ -165,7 +190,7 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
               <rect
                 x={`${w.x - wallW/2}%`} y={`${w.y - wallH/2}%`}
                 width={`${wallW}%`} height={`${wallH}%`}
-                fill={existing.color + '55'} rx="0.4"
+                fill={reinforcementOnMarker.color + '55'} rx="0.4"
                 style={{ pointerEvents: 'none' }}
               />
             )}
@@ -175,6 +200,12 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
               width={`${Math.max(wallW, 0.8)}%`} height={`${Math.max(wallH, 0.8)}%`}
               fill="transparent"
             />
+            {pendingCanAttach && <rect
+              x={`${w.x - Math.max(wallW, 0.8)/2}%`} y={`${w.y - Math.max(wallH, 0.8)/2}%`}
+              width={`${Math.max(wallW, 0.8)}%`} height={`${Math.max(wallH, 0.8)}%`}
+              fill={activeColor + '22'} stroke={activeColor} strokeWidth="1.2" strokeDasharray="2 1"
+              style={{ pointerEvents:'none' }}
+            />}
           </>
         );
       })()}
@@ -197,7 +228,7 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
               x={`${w.x - s/2}%`} y={`${w.y - s/2}%`}
               width={`${s}%`} height={`${s}%`}
               fill={hasReinforce ? `url(#${pid})` : baseColor + '18'}
-              stroke={hasReinforce ? existing.color : baseColor}
+              stroke={hasReinforce ? reinforcementOnMarker.color : baseColor}
               strokeWidth={hasReinforce ? '1.5' : '1'}
               strokeDasharray={hasReinforce ? undefined : '2 1.5'}
               rx="0.3"
@@ -220,7 +251,7 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
               <rect
                 x={`${w.x - s/2}%`} y={`${w.y - s/2}%`}
                 width={`${s}%`} height={`${s}%`}
-                fill={existing.color + '55'}
+                fill={reinforcementOnMarker.color + '55'}
                 style={{ pointerEvents: 'none' }}
               />
             )}
@@ -243,14 +274,14 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
                 <>
                   <defs>
                     <pattern id={pid} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                      <rect width="3" height="6" fill={existing.color + 'CC'}/>
+                      <rect width="3" height="6" fill={barricadeOnMarker.color + 'CC'}/>
                     </pattern>
                   </defs>
                   <rect
                     x={`${w.x - bw/2}%`} y={`${w.y - bh/2}%`}
                     width={`${bw}%`} height={`${bh}%`}
                     fill={`url(#${pid})`}
-                    stroke={existing.color}
+                    stroke={barricadeOnMarker.color}
                     strokeWidth="1.5"
                     rx="0.3"
                     style={{ pointerEvents: 'none' }}
@@ -258,14 +289,14 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
                   <rect
                     x={`${w.x - bw/2}%`} y={`${w.y - bh/2}%`}
                     width={`${bw}%`} height={`${bh}%`}
-                    fill={existing.color + '44'} rx="0.3"
+                    fill={barricadeOnMarker.color + '44'} rx="0.3"
                     style={{ pointerEvents: 'none' }}
                   />
                   <text
                     x={`${w.x}%`} y={`${w.y + 0.3}%`}
                     textAnchor="middle" dominantBaseline="middle"
                     fontSize="22" fontFamily="Arial,sans-serif" fontWeight="900"
-                    fill={existing.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
+                    fill={barricadeOnMarker.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
                     style={{ pointerEvents: 'none', userSelect: 'none' }}>B</text>
                 </>
               );
@@ -281,21 +312,6 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
                 rx="0.3"
               />
             )}
-            {/* Opening gadget — colored box + icon (matches free gadgets) */}
-            {gadgetOnOpening && gadgetOnOpening.gadget?.icon && (
-              <>
-                <rect
-                  x={`${w.x - 1.6}%`} y={`${w.y - 1.6}%`} width="3.2%" height="3.2%"
-                  fill="rgba(8,10,14,0.85)" stroke={gadgetOnOpening.color} strokeWidth="1.5" rx="0.5"
-                  style={{ pointerEvents: 'none' }}
-                />
-                <image
-                  href={gadgetOnOpening.gadget.icon}
-                  x={`${w.x - 1.3}%`} y={`${w.y - 1.3}%`} width="2.6%" height="2.6%"
-                  style={{ pointerEvents: 'none' }}
-                />
-              </>
-            )}
             {/* Transparent click target */}
             <rect
               x={`${w.x - Math.max(ow, 1.2)/2}%`} y={`${w.y - Math.max(oh, 1.2)/2}%`}
@@ -306,13 +322,54 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
         );
       })()}
 
-      {/* Reinforce label */}
+      {gadgetsOnMarker.map((gadgetElement, index) => {
+        if (!gadgetElement.gadget?.icon) return null;
+        const slot = gadgetElement.attachmentSlot ?? index;
+        const side = gadgetElement.attachmentSide ?? getDefaultAttachmentSide(w);
+        const scale = gadgetElement.scale || 1;
+        const size = ATTACHED_GADGET_SIZE * scale;
+        const half = size / 2;
+        const imageInset = size * 0.04;
+        const position = getAttachedGadgetPosition(w, {
+          slot, side, scale, slotSpacingScale:attachedSlotSpacingScale,
+        });
+        const selected = selectedIds.includes(gadgetElement.id);
+        return <g key={gadgetElement.id}>
+          <line x1={`${w.x}%`} y1={`${w.y}%`} x2={`${position.x}%`} y2={`${position.y}%`}
+            stroke={gadgetElement.color} strokeWidth="1.1" strokeDasharray="2 1.2"
+            strokeLinecap="round" style={{ pointerEvents:'none' }}/>
+          <rect x={`${position.x - half}%`} y={`${position.y - half}%`}
+            width={`${size}%`} height={`${size}%`}
+            fill="rgba(8,10,14,0.92)" stroke={selected ? '#fff' : gadgetElement.color}
+            strokeWidth={selected ? '1.8' : '1.2'} rx="0.45"
+            style={{ pointerEvents:'none', filter:selected ? `drop-shadow(0 0 4px ${gadgetElement.color})` : undefined }}/>
+          <image href={gadgetElement.gadget.icon}
+            x={`${position.x - half + imageInset}%`} y={`${position.y - half + imageInset}%`}
+            width={`${size - imageInset * 2}%`} height={`${size - imageInset * 2}%`}
+            style={{
+              pointerEvents:'none',
+              transform:`rotate(${gadgetElement.rotation || 0}deg)`,
+              transformOrigin:'center', transformBox:'fill-box',
+            }}/>
+          <rect x={`${position.x - half - 0.25}%`} y={`${position.y - half - 0.25}%`}
+            width={`${size + 0.5}%`} height={`${size + 0.5}%`}
+            fill="transparent" data-gadget-hitbox="true" data-gadget-id={gadgetElement.id}
+            onClick={e => handleGadgetClick(e, gadgetElement)}
+            onContextMenu={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              setElements(prev => prev.filter(element => element.id !== gadgetElement.id));
+            }}/>
+        </g>;
+      })}
+
+      {/* Keep the label above connector lines so the wall remains readable. */}
       {hasReinforce && (
         <text
           x={`${w.x}%`} y={`${w.y + 0.35}%`}
           textAnchor="middle" dominantBaseline="middle"
           fontSize="24" fontFamily="Arial,sans-serif" fontWeight="900"
-          fill={existing.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
+          fill={reinforcementOnMarker.color} stroke="rgba(0,0,0,0.8)" strokeWidth="1.5" paintOrder="stroke"
           style={{ pointerEvents: 'none', userSelect: 'none' }}>R</text>
       )}
 

@@ -1,23 +1,8 @@
 import React from 'react';
-import { COLLAB_URL_KEY, getCollabUrl } from '../../hooks/useCollab';
+import { getCollabUrl } from '../../hooks/useCollab';
+import { createCollabInvite } from '../../utils/collabInvite';
 
 const initials = (name) => (name || '?').slice(0, 2).toUpperCase();
-
-// Prompt for the collab server URL and store it (runtime override, no rebuild).
-function editServerUrl(onToast) {
-  const current = getCollabUrl();
-  const next = window.prompt(
-    'Collab server URL (e.g. wss://your-tunnel.trycloudflare.com or ws://localhost:1234):',
-    current,
-  );
-  if (next == null) return;
-  const val = next.trim();
-  try {
-    if (val) localStorage.setItem(COLLAB_URL_KEY, val);
-    else localStorage.removeItem(COLLAB_URL_KEY);
-    onToast?.('Server saved — restart the session');
-  } catch { /* ignore */ }
-}
 
 // Remote peer cursors, rendered inside the %-coordinate canvas container.
 export function CollabCursors({ peers }) {
@@ -49,6 +34,7 @@ export function CollabCursors({ peers }) {
 // Floating collaboration control: start a session, join, show peers, invite, leave.
 export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
   const [joinVal, setJoinVal] = React.useState('');
+  const [starting, setStarting] = React.useState(false);
   const barStyle = {
     position: 'fixed', bottom: 96, right: 16, zIndex: 800,
     display: 'flex', alignItems: 'center', gap: 8,
@@ -58,37 +44,56 @@ export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
   };
 
   if (!room) {
-    const submitJoin = () => { if (joinVal.trim()) { onJoin(joinVal); setJoinVal(''); } };
+    const start = async () => {
+      if (starting) return;
+      setStarting(true);
+      try {
+        await onStart();
+      } catch (error) {
+        onToast?.(error?.message || String(error) || 'Live Collab could not be started');
+      } finally {
+        setStarting(false);
+      }
+    };
+    const submitJoin = () => {
+      if (!joinVal.trim()) return;
+      try {
+        onJoin(joinVal);
+        setJoinVal('');
+      } catch (error) {
+        onToast?.(error?.message || String(error) || 'Invalid invitation code');
+      }
+    };
     return (
       <div style={barStyle}>
         <button className="topbar-btn" style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-          onClick={onStart} title="Start a live session and invite teammates">
-          👥 Start Live Collab
+          onClick={start} disabled={starting} title="Automatically start a server and public tunnel">
+          {starting ? 'Starting server & tunnel…' : '👥 Start Live Collab'}
         </button>
         <span style={{ color: 'var(--text-muted, #8a93a3)' }}>or</span>
         <input
           value={joinVal}
           onChange={e => setJoinVal(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') submitJoin(); }}
-          placeholder="room code"
+          placeholder="invite code"
           style={{
-            width: 100, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-mid, #2a2f3a)',
+            width: 150, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-mid, #2a2f3a)',
             borderRadius: 5, padding: '5px 8px', color: 'var(--text-primary, #e8edf2)',
             fontFamily: 'var(--font-mono, monospace)', fontSize: 12,
           }}
         />
-        <button className="topbar-btn" onClick={submitJoin} title="Join a room by its code">Join</button>
-        <button className="topbar-btn" onClick={() => editServerUrl(onToast)} title="Set collab server URL">⚙</button>
+        <button className="topbar-btn" onClick={submitJoin} title="Join using an invitation code">Join</button>
       </div>
     );
   }
 
-  const invite = () => {
+  const invite = async () => {
+    const code = createCollabInvite(room, getCollabUrl());
     try {
-      navigator.clipboard.writeText(room);
-      onToast?.('Room code copied — share it, teammates paste it in Join');
+      await navigator.clipboard.writeText(code);
+      onToast?.('Invitation copied — your teammate only needs to paste this code');
     } catch {
-      window.prompt('Room code (share with teammates):', room);
+      window.prompt('Invitation code (send this to your teammate):', code);
     }
   };
 
@@ -117,8 +122,7 @@ export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
         <span style={{ marginLeft: 8, color: 'var(--text-muted, #8a93a3)' }}>{collab.peers.length + 1}</span>
       </div>
 
-      <button className="topbar-btn" onClick={invite} title="Copy room code to share">🔗 Share code</button>
-      <button className="topbar-btn" onClick={() => editServerUrl(onToast)} title="Set collab server URL">⚙</button>
+      <button className="topbar-btn" onClick={invite} title="Copy the complete invitation code">🔗 Share code</button>
       <span style={{ color: 'var(--text-muted, #8a93a3)', letterSpacing: 1 }}>#{room}</span>
       <button className="topbar-btn" onClick={onLeave} title="Leave session"
         style={{ color: '#ff8080', borderColor: 'rgba(232,75,75,0.4)' }}>✕</button>

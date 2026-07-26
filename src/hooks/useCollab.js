@@ -3,8 +3,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 
 // Base URL of the Yjs websocket server. Priority:
-//   1. runtime override in localStorage (set via the ⚙ button — lets you paste a
-//      fresh tunnel URL without rebuilding),
+//   1. runtime override in localStorage (set automatically by hosting/joining),
 //   2. REACT_APP_COLLAB_URL baked at build time,
 //   3. local dev server.
 export const COLLAB_URL_KEY = 'clav-collab-url';
@@ -14,6 +13,14 @@ export function getCollabUrl() {
     if (override) return override;
   } catch { /* ignore */ }
   return process.env.REACT_APP_COLLAB_URL || 'ws://localhost:1234';
+}
+
+export function setCollabUrl(serverUrl) {
+  try {
+    const value = String(serverUrl || '').trim().replace(/\/$/, '');
+    if (value) localStorage.setItem(COLLAB_URL_KEY, value);
+    else localStorage.removeItem(COLLAB_URL_KEY);
+  } catch { /* ignore */ }
 }
 
 const NAMES  = ['Ash', 'Thatcher', 'Jäger', 'Bandit', 'Mute', 'Thermite', 'Zofia', 'Ela'];

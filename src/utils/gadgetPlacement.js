@@ -1,3 +1,5 @@
+import { createElementId } from './elementId';
+
 export const WALL_MARKER_TYPES = new Set(['wall', 'softwall', 'hatch']);
 export const OPENING_MARKER_TYPES = new Set(['door', 'window']);
 export const ATTACHED_GADGET_SIZE = 3;
@@ -92,7 +94,6 @@ export function layoutAttachedGadgets(elements, marker) {
 }
 
 export function upsertAttachedGadget(elements, marker, gadget, color, meta = {}) {
-  const attached = elements.filter(element => element.type === 'gadget' && element.wallId === marker.id);
   const attachmentSlot = getNextAttachmentSlot(elements, marker.id);
   const attachmentSide = meta.attachmentSide === -1 || meta.attachmentSide === 1
     ? meta.attachmentSide
@@ -101,7 +102,7 @@ export function upsertAttachedGadget(elements, marker, gadget, color, meta = {})
     slot:attachmentSlot, side:attachmentSide, scale:meta.scale,
   });
   return layoutAttachedGadgets([...elements, {
-    id:Date.now() + attached.length, type:'gadget', wallId:marker.id, gadget,
+    id:createElementId(), type:'gadget', wallId:marker.id, gadget,
     x:position.x, y:position.y, anchorX:marker.x, anchorY:marker.y,
     attachmentSlot, attachmentSide, rotation:0,
     color, ...meta,

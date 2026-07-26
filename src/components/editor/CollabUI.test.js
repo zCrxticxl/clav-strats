@@ -3,21 +3,18 @@ import { createRoot } from 'react-dom/client';
 import { CollabBar } from './CollabUI';
 import { parseCollabInvite } from '../../utils/collabInvite';
 
-jest.mock('../../hooks/useCollab', () => ({
-  getCollabUrl: () => globalThis.localStorage.getItem('clav-collab-url') || 'ws://localhost:1234',
-}));
-
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const collab = {
   connected:true,
   synced:true,
+  unreachable:false,
+  serverUrl:'wss://bright-map.trycloudflare.com',
   self:{ name:'Host', color:'#E8B84B' },
   peers:[],
 };
 
 test('copies a self-contained invitation with room and server', async () => {
-  localStorage.setItem('clav-collab-url', 'wss://bright-map.trycloudflare.com');
   const writeText = jest.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', {
     configurable:true,
@@ -27,8 +24,9 @@ test('copies a self-contained invitation with room and server', async () => {
   const root = createRoot(container);
   act(() => root.render(
     <CollabBar
-      collab={collab}
+      collab={{ ...collab, serverUrl:'ws://127.0.0.1:4321' }}
       room="room-123"
+      inviteServerUrl="wss://bright-map.trycloudflare.com"
       onLeave={() => {}}
       onToast={() => {}}
     />
@@ -43,6 +41,53 @@ test('copies a self-contained invitation with room and server', async () => {
     room:'room-123',
     serverUrl:'wss://bright-map.trycloudflare.com',
   });
+  act(() => root.unmount());
+});
+
+test('reports an unreachable endpoint instead of connecting forever', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  act(() => root.render(
+    <CollabBar
+      collab={{ ...collab, connected:false, synced:false, unreachable:true, serverUrl:'wss://dead.trycloudflare.com' }}
+      room="room-123"
+      onLeave={() => {}}
+      onToast={() => {}}
+    />
+  ));
+
+  expect(container.textContent).toContain('unreachable');
+  expect(container.textContent).not.toContain('connect…');
+  expect(container.querySelector('[title*="dead.trycloudflare.com"]')).not.toBeNull();
+  act(() => root.unmount());
+});
+
+test('shows the live state once connected and synced', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  act(() => root.render(
+    <CollabBar collab={collab} room="room-123" onLeave={() => {}} onToast={() => {}} />
+  ));
+
+  expect(container.textContent).toContain('live');
+  act(() => root.unmount());
+});
+
+test('disables stale invitations while a replacement tunnel starts', () => {
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  act(() => root.render(
+    <CollabBar
+      collab={{ ...collab, connected:false, unreachable:true }}
+      room="room-123"
+      recovering
+      onLeave={() => {}}
+      onToast={() => {}}
+    />
+  ));
+
+  expect(container.textContent).toContain('repairing…');
+  expect(container.querySelector('button[title*="becomes available"]').disabled).toBe(true);
   act(() => root.unmount());
 });
 

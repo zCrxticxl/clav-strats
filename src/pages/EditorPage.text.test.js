@@ -7,8 +7,10 @@ jest.mock('../utils/wallDetector', () => ({
   detectWalls: () => Promise.resolve({ walls:[], doors:[], hatches:[] }),
 }));
 jest.mock('../hooks/useCollab', () => ({
+  getCollabUrl: () => 'ws://localhost:1234',
+  setCollabUrl: () => {},
   useCollab: () => ({
-    enabled:false, connected:false, synced:false,
+    enabled:false, connected:false, synced:false, unreachable:false, serverUrl:null,
     self:{ name:'Test', color:'#fff' }, peers:[],
     ydoc:null, yElements:null, yLineups:null, yMeta:null,
     setPresence:() => {},

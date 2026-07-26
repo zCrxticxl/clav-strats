@@ -4,6 +4,7 @@ import {
   markerSupportsGadget, upsertAttachedGadget,
 } from '../../utils/gadgetPlacement';
 import { recolorElements } from '../../utils/elementColor';
+import { createElementId } from '../../utils/elementId';
 
 export const WALL_COLORS = {
   wall: '#E8B84B',
@@ -61,7 +62,7 @@ export function InteractiveWall({
       setElements(prev => {
         const filtered = prev.filter(el => !(el.wallId === w.id && el.type === 'reinforcement'));
         return [...filtered, {
-          id: Date.now(), type: 'reinforcement', wallId: w.id,
+          id: createElementId(), type: 'reinforcement', wallId: w.id,
           x: w.x, y: w.y, w: w.w, h: w.h,
           color: activeColor,
           horizontal: w.horizontal !== undefined ? w.horizontal : false,
@@ -88,7 +89,7 @@ export function InteractiveWall({
       setElements(prev => {
         const filtered = prev.filter(el => !(el.wallId === w.id && el.type === 'barricade'));
         return [...filtered, {
-          id: Date.now(), type: 'barricade', wallId: w.id,
+          id: createElementId(), type: 'barricade', wallId: w.id,
           x: w.x, y: w.y, w: w.w, h: w.h,
           color: activeColor, floor: selectedFloor, mapId: selectedMap,
         }];

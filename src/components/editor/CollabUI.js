@@ -1,5 +1,4 @@
 import React from 'react';
-import { getCollabUrl } from '../../hooks/useCollab';
 import { createCollabInvite } from '../../utils/collabInvite';
 
 const initials = (name) => (name || '?').slice(0, 2).toUpperCase();
@@ -32,7 +31,16 @@ export function CollabCursors({ peers }) {
 }
 
 // Floating collaboration control: start a session, join, show peers, invite, leave.
-export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
+export function CollabBar({
+  collab,
+  room,
+  inviteServerUrl,
+  recovering = false,
+  onStart,
+  onJoin,
+  onLeave,
+  onToast,
+}) {
   const [joinVal, setJoinVal] = React.useState('');
   const [starting, setStarting] = React.useState(false);
   const barStyle = {
@@ -88,22 +96,39 @@ export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
   }
 
   const invite = async () => {
-    const code = createCollabInvite(room, getCollabUrl());
     try {
+      if (!collab.connected || collab.unreachable || recovering) {
+        throw new Error('Wait until the collaboration tunnel is live before sharing.');
+      }
+      const code = createCollabInvite(room, inviteServerUrl || collab.serverUrl);
       await navigator.clipboard.writeText(code);
       onToast?.('Invitation copied — your teammate only needs to paste this code');
-    } catch {
-      window.prompt('Invitation code (send this to your teammate):', code);
+    } catch (error) {
+      onToast?.(error?.message || 'Invitation could not be copied');
     }
   };
 
-  const dotColor = collab.connected ? '#50E8A0' : '#E8B84B';
-  const statusLabel = collab.connected ? (collab.synced ? 'live' : 'sync…') : 'connect…';
+  const dotColor = recovering ? '#4B9CE8' : collab.unreachable ? '#E84B4B' : collab.connected ? '#50E8A0' : '#E8B84B';
+  const statusLabel = recovering
+    ? 'repairing…'
+    : collab.unreachable
+    ? 'unreachable'
+    : collab.connected ? (collab.synced ? 'live' : 'sync…') : 'connect…';
+  const statusTitle = recovering
+    ? 'The public tunnel stopped. A replacement is being started automatically.'
+    : collab.unreachable
+    ? `Cannot reach ${collab.serverUrl || 'the collaboration server'}. `
+      + 'Invitation codes expire when the host closes the app — ask for a fresh one, '
+      + 'or leave the session and start a new one.'
+    : `Collaboration server: ${inviteServerUrl || collab.serverUrl || 'not connected'}`;
 
   return (
     <div style={barStyle}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, boxShadow: `0 0 6px ${dotColor}` }} />
-      <span style={{ color: 'var(--text-muted, #8a93a3)' }}>{statusLabel}</span>
+      <span title={statusTitle}
+        style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, boxShadow: `0 0 6px ${dotColor}` }} />
+      <span title={statusTitle} style={{ color: collab.unreachable && !recovering ? '#ff8080' : 'var(--text-muted, #8a93a3)' }}>
+        {statusLabel}
+      </span>
 
       {/* self + peer avatars */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -122,7 +147,16 @@ export function CollabBar({ collab, room, onStart, onJoin, onLeave, onToast }) {
         <span style={{ marginLeft: 8, color: 'var(--text-muted, #8a93a3)' }}>{collab.peers.length + 1}</span>
       </div>
 
-      <button className="topbar-btn" onClick={invite} title="Copy the complete invitation code">🔗 Share code</button>
+      <button
+        className="topbar-btn"
+        onClick={invite}
+        disabled={!collab.connected || collab.unreachable || recovering}
+        title={collab.connected && !collab.unreachable && !recovering
+          ? 'Copy the complete invitation code'
+          : 'The invitation becomes available when the tunnel is live'}
+      >
+        🔗 Share code
+      </button>
       <span style={{ color: 'var(--text-muted, #8a93a3)', letterSpacing: 1 }}>#{room}</span>
       <button className="topbar-btn" onClick={onLeave} title="Leave session"
         style={{ color: '#ff8080', borderColor: 'rgba(232,75,75,0.4)' }}>✕</button>

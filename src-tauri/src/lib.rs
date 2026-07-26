@@ -9,6 +9,8 @@ pub fn run() {
         .manage(collab_host::CollabHostState::default())
         .invoke_handler(tauri::generate_handler![
             collab_host::start_collab_host,
+            collab_host::restart_collab_tunnel,
+            collab_host::collab_host_status,
             collab_host::stop_collab_host,
         ])
         .build(tauri::generate_context!())

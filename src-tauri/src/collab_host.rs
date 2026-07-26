@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fs,
     io::{BufRead, BufReader, Read},
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{mpsc, Arc},
@@ -37,6 +38,7 @@ struct HostRuntime {
     server_url: String,
     local_port: u16,
     server_shutdown: Option<oneshot::Sender<()>>,
+    tunnel_executable: PathBuf,
     tunnel: Child,
 }
 
@@ -59,7 +61,25 @@ impl Drop for HostRuntime {
 #[serde(rename_all = "camelCase")]
 pub struct CollabHostInfo {
     server_url: String,
+    local_server_url: String,
     local_port: u16,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollabHostStatus {
+    running: bool,
+    reachable: bool,
+    server_url: Option<String>,
+    local_server_url: Option<String>,
+}
+
+fn host_info(runtime: &HostRuntime) -> CollabHostInfo {
+    CollabHostInfo {
+        server_url: runtime.server_url.clone(),
+        local_server_url: format!("ws://127.0.0.1:{}", runtime.local_port),
+        local_port: runtime.local_port,
+    }
 }
 
 impl CollabHostState {
@@ -68,10 +88,7 @@ impl CollabHostState {
         if let Some(existing) = runtime.as_mut() {
             match existing.tunnel.try_wait() {
                 Ok(None) => {
-                    return Ok(CollabHostInfo {
-                        server_url: existing.server_url.clone(),
-                        local_port: existing.local_port,
-                    });
+                    return Ok(host_info(existing));
                 }
                 Ok(Some(_)) | Err(_) => {
                     runtime.take();
@@ -105,17 +122,63 @@ impl CollabHostState {
             server_url: server_url.clone(),
             local_port,
             server_shutdown,
+            tunnel_executable: cloudflared,
             tunnel,
         });
 
-        Ok(CollabHostInfo {
-            server_url,
-            local_port,
-        })
+        Ok(host_info(
+            runtime.as_ref().expect("host runtime was just created"),
+        ))
     }
 
     async fn stop(&self) -> bool {
         self.runtime.lock().await.take().is_some()
+    }
+
+    async fn restart_tunnel(&self, app: &AppHandle) -> Result<CollabHostInfo, String> {
+        let mut runtime = self.runtime.lock().await;
+        let Some(existing) = runtime.as_mut() else {
+            drop(runtime);
+            return self.start(app).await;
+        };
+
+        // A Quick Tunnel can lose its public hostname while the local Yjs server
+        // is still healthy. Only replace cloudflared here so every shared Yjs
+        // room and document stays alive across tunnel recovery.
+        terminate_child(&mut existing.tunnel);
+        let (tunnel, public_http_url) =
+            start_quick_tunnel(&existing.tunnel_executable, existing.local_port).await?;
+        existing.server_url = public_http_url.replacen("https://", "wss://", 1);
+        existing.tunnel = tunnel;
+
+        Ok(host_info(existing))
+    }
+
+    async fn status(&self) -> CollabHostStatus {
+        let (running, server_url, local_server_url) = {
+            let mut runtime = self.runtime.lock().await;
+            let Some(existing) = runtime.as_mut() else {
+                return CollabHostStatus {
+                    running: false,
+                    reachable: false,
+                    server_url: None,
+                    local_server_url: None,
+                };
+            };
+            let running = matches!(existing.tunnel.try_wait(), Ok(None));
+            (
+                running,
+                existing.server_url.clone(),
+                format!("ws://127.0.0.1:{}", existing.local_port),
+            )
+        };
+        let reachable = running && public_tunnel_reachable(&server_url).await;
+        CollabHostStatus {
+            running,
+            reachable,
+            server_url: Some(server_url),
+            local_server_url: Some(local_server_url),
+        }
     }
 
     pub fn shutdown_now(&self) {
@@ -136,6 +199,21 @@ pub async fn start_collab_host(
 #[tauri::command]
 pub async fn stop_collab_host(state: State<'_, CollabHostState>) -> Result<bool, String> {
     Ok(state.stop().await)
+}
+
+#[tauri::command]
+pub async fn restart_collab_tunnel(
+    app: AppHandle,
+    state: State<'_, CollabHostState>,
+) -> Result<CollabHostInfo, String> {
+    state.restart_tunnel(&app).await
+}
+
+#[tauri::command]
+pub async fn collab_host_status(
+    state: State<'_, CollabHostState>,
+) -> Result<CollabHostStatus, String> {
+    Ok(state.status().await)
 }
 
 fn start_local_server() -> (u16, oneshot::Sender<()>) {
@@ -332,7 +410,115 @@ async fn start_quick_tunnel(
             ));
         }
     }
+    if let Err(error) = wait_for_public_tunnel(&public_url, &mut child).await {
+        terminate_child(&mut child);
+        return Err(error);
+    }
     Ok((child, public_url))
+}
+
+async fn wait_for_public_tunnel(public_url: &str, child: &mut Child) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut last_error = "public DNS record is not ready".to_string();
+
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Cloudflare Tunnel stopped before it became reachable ({status})."
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Cloudflare Tunnel status could not be read: {error}"
+                ));
+            }
+        }
+
+        match check_public_tunnel(public_url).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => last_error = "public health endpoint is not ready".to_string(),
+            Err(error) => last_error = error,
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+
+    Err(format!(
+        "Cloudflare Tunnel was announced but never became publicly reachable: {last_error}"
+    ))
+}
+
+async fn public_tunnel_reachable(server_url: &str) -> bool {
+    check_public_tunnel(server_url).await.unwrap_or(false)
+}
+
+async fn check_public_tunnel(server_url: &str) -> Result<bool, String> {
+    let http_url = server_url.replacen("wss://", "https://", 1);
+    let parsed =
+        Url::parse(&http_url).map_err(|error| format!("Invalid Cloudflare Tunnel URL: {error}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Cloudflare Tunnel URL has no hostname.".to_string())?;
+    let addresses = resolve_with_cloudflare_doh(host).await?;
+    if addresses.is_empty() {
+        return Ok(false);
+    }
+
+    let health_url = format!("https://{host}/health");
+    for address in addresses {
+        let client = reqwest::Client::builder()
+            .resolve(host, SocketAddr::new(address, 443))
+            .timeout(Duration::from_secs(8))
+            .build()
+            .map_err(|error| format!("Public tunnel health client failed: {error}"))?;
+        if let Ok(response) = client.get(&health_url).send().await {
+            if response.status().is_success() {
+                if let Ok(body) = response.text().await {
+                    if body.trim() == "ok" {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+async fn resolve_with_cloudflare_doh(host: &str) -> Result<Vec<IpAddr>, String> {
+    let lookup_url = format!("https://cloudflare-dns.com/dns-query?name={host}&type=A");
+    let response = reqwest::Client::new()
+        .get(lookup_url)
+        .header("accept", "application/dns-json")
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|error| format!("Cloudflare DNS lookup failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cloudflare DNS lookup returned HTTP {}.",
+            response.status()
+        ));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Cloudflare DNS response could not be read: {error}"))?;
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Cloudflare DNS response was invalid: {error}"))?;
+    if json.get("Status").and_then(|value| value.as_u64()) != Some(0) {
+        return Ok(Vec::new());
+    }
+
+    Ok(json
+        .get("Answer")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|answer| answer.get("type").and_then(|value| value.as_u64()) == Some(1))
+        .filter_map(|answer| answer.get("data").and_then(|value| value.as_str()))
+        .filter_map(|address| address.parse::<IpAddr>().ok())
+        .collect())
 }
 
 fn terminate_child(child: &mut Child) {
@@ -479,13 +665,27 @@ setTimeout(() => {
         assert!(public_url.ends_with(".trycloudflare.com"));
         let websocket_url = public_url.replacen("https://", "wss://", 1);
         let output = run_yjs_smoke(&websocket_url);
-        let _ = tunnel.kill();
-        let _ = tunnel.wait();
-        let _ = shutdown.send(());
         assert!(
             output.status.success(),
-            "Yjs tunnel smoke test failed: {}",
+            "Initial Yjs tunnel smoke test failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+        let _ = tunnel.kill();
+        let _ = tunnel.wait();
+
+        let (mut replacement_tunnel, replacement_url) = start_quick_tunnel(cloudflared, port)
+            .await
+            .expect("replacement quick tunnel failed to start");
+        assert!(replacement_url.ends_with(".trycloudflare.com"));
+        let replacement_websocket_url = replacement_url.replacen("https://", "wss://", 1);
+        let replacement_output = run_yjs_smoke(&replacement_websocket_url);
+        let _ = replacement_tunnel.kill();
+        let _ = replacement_tunnel.wait();
+        let _ = shutdown.send(());
+        assert!(
+            replacement_output.status.success(),
+            "Replacement Yjs tunnel smoke test failed: {}",
+            String::from_utf8_lossy(&replacement_output.stderr)
         );
     }
 }

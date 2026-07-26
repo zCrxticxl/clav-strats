@@ -3,7 +3,7 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useStrats } from '../hooks/useStrats';
 import { useEditorHistory } from '../hooks/useEditorHistory';
 import { useEditorViewport } from '../hooks/useEditorViewport';
-import { setCollabUrl, useCollab } from '../hooks/useCollab';
+import { getCollabUrl, setCollabUrl, useCollab } from '../hooks/useCollab';
 import { useEditorCollaboration } from '../hooks/useEditorCollaboration';
 import { CollabBar, CollabCursors } from '../components/editor/CollabUI';
 import { ALL_MAPS, MAP_BLUEPRINTS } from '../data/maps';
@@ -12,6 +12,7 @@ import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES, GADGETS } from '../
 
 import { MAP_WALLS } from '../data/walls';
 import { exportStratAsPNG } from '../utils/exportPng';
+import { createElementId } from '../utils/elementId';
 import { detectWalls } from '../utils/wallDetector';
 import { OpImg } from '../components/editor/OpIcons';
 import { InteractiveWall } from '../components/editor/InteractiveWall';
@@ -208,8 +209,19 @@ export default function EditorPage() {
   }, [setEditorState]);
 
   // ── collaboration (Yjs) ──────────────────────────────────────────────────
-  const room   = sp.get('room') || null;
-  const collab = useCollab(room);
+  const room = sp.get('room') || null;
+  const [collabConnectionUrl, setCollabConnectionUrl] = useState(() => getCollabUrl());
+  const [collabPublicUrl, setCollabPublicUrl] = useState(() => getCollabUrl());
+  const updateCollabEndpoint = useCallback((publicUrl, connectionUrl = publicUrl) => {
+    setCollabUrl(publicUrl);
+    const storedPublicUrl = publicUrl ? getCollabUrl() : null;
+    setCollabPublicUrl(storedPublicUrl);
+    setCollabConnectionUrl(
+      String(connectionUrl || storedPublicUrl || getCollabUrl()).trim().replace(/\/$/, '')
+    );
+  }, []);
+  const collab = useCollab(room, collabConnectionUrl);
+  const [collabRecovering, setCollabRecovering] = useState(false);
   const hostingCollabRef = useRef(sp.get('collabHost') === '1');
   useEffect(() => () => {
     if (!hostingCollabRef.current || !window.__TAURI_INTERNALS__) return;
@@ -387,7 +399,7 @@ export default function EditorPage() {
       const x = ((e.clientX - rect.left) / rect.width) * 100;
       const y = ((e.clientY - rect.top) / rect.height) * 100;
       setElements(prev => [...prev, {
-        id: Date.now(), type: 'operator',
+        id: createElementId(), type: 'operator',
         op: drag.op, x, y,
         side: sideRef.current, color: drag.color,
         floor: floorRef.current, mapId: mapRef.current,
@@ -547,7 +559,7 @@ export default function EditorPage() {
             .filter(el => selectedIds.includes(el.id))
             .map(el => ({
               ...el,
-              id: Date.now() + Math.random(),
+              id: createElementId(),
               x:  (el.x  ?? 0) + 2,
               y:  (el.y  ?? 0) + 2,
               x1: el.x1 != null ? el.x1 + 2 : undefined,
@@ -668,7 +680,7 @@ export default function EditorPage() {
     }
     if (activeTool === 'verticalholes') {
       setElements(prev => [...prev, {
-        id:Date.now(), type:'verticalholes', x:pt.x, y:pt.y,
+        id:createElementId(), type:'verticalholes', x:pt.x, y:pt.y,
         color:activeColor, scale:1, rotation:0,
         floor:selectedFloor, mapId:selectedMap,
       }]);
@@ -684,10 +696,10 @@ export default function EditorPage() {
               ? prev
               : prev.map(element => element.id === existing.id ? { ...element, color:activeColor } : element);
           }
-          return [...prev, { id: Date.now(), type: activeTool, wallId: snap.id, x: snap.x, y: snap.y, w: snap.w, h: snap.h, color: activeColor, horizontal: snap.horizontal, floor: selectedFloor, mapId: selectedMap }];
+          return [...prev, { id: createElementId(), type: activeTool, wallId: snap.id, x: snap.x, y: snap.y, w: snap.w, h: snap.h, color: activeColor, horizontal: snap.horizontal, floor: selectedFloor, mapId: selectedMap }];
         });
       } else if (e.shiftKey || activeTool === 'rotate') {
-        setElements(prev => [...prev, { id: Date.now(), type: activeTool, x: pt.x, y: pt.y, color: activeColor, horizontal: activeTool === 'rotate' ? rotateOrient === 'h' : false, floor: selectedFloor, mapId: selectedMap }]);
+        setElements(prev => [...prev, { id: createElementId(), type: activeTool, x: pt.x, y: pt.y, color: activeColor, horizontal: activeTool === 'rotate' ? rotateOrient === 'h' : false, floor: selectedFloor, mapId: selectedMap }]);
       } else {
         showToast('Click a wall (or hold Shift to place freely)');
       }
@@ -793,7 +805,7 @@ export default function EditorPage() {
       drawStartRef.current = null;
       setIsDrawing(false);
       if (op) {
-        setElements(prev => [...prev, { id: Date.now(), type: 'operator', op, x: pt.x, y: pt.y, side, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
+        setElements(prev => [...prev, { id: createElementId(), type: 'operator', op, x: pt.x, y: pt.y, side, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
         setPendingOp(null); // auto-clear after placement — no sticky op
       } else {
         showToast('Select an operator in the sidebar first');
@@ -816,7 +828,7 @@ export default function EditorPage() {
     }
     setIsDrawing(false);
     if (!currentPath) return;
-    const final = { ...currentPath, x2: pt.x, y2: pt.y, id: Date.now() };
+    const final = { ...currentPath, x2: pt.x, y2: pt.y, id: createElementId() };
     const isRoute = final.type === 'route';
     const hasContent = isRoute
       ? (final.points?.length ?? 0) > 3
@@ -853,7 +865,7 @@ export default function EditorPage() {
     const pts = draft.points.filter((p, i, a) => i === 0 || Math.hypot(p.x - a[i-1].x, p.y - a[i-1].y) > 0.3);
     if (pts.length >= 2) {
       setElements(prev => [...prev, {
-        id: Date.now(), type: 'route', points: pts,
+        id: createElementId(), type: 'route', points: pts,
         color: draft.color, width: draft.width,
         floor: floorRef.current, mapId: mapRef.current,
       }]);
@@ -884,7 +896,7 @@ export default function EditorPage() {
 
   const submitText = (value = textInput.val) => {
     if (value.trim()) {
-      setElements(prev => [...prev, { id: Date.now(), type: 'text', x: textInput.x, y: textInput.y, text:value, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
+      setElements(prev => [...prev, { id: createElementId(), type: 'text', x: textInput.x, y: textInput.y, text:value, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
     }
     setTextInput({ active: false, x: 0, y: 0, val: '' });
   };
@@ -957,7 +969,7 @@ export default function EditorPage() {
     if (!host?.serverUrl) {
       throw new Error('The public collaboration server did not return an address.');
     }
-    setCollabUrl(host.serverUrl);
+    updateCollabEndpoint(host.serverUrl, host.localServerUrl || host.serverUrl);
     hostingCollabRef.current = true;
     const id = (window.crypto?.randomUUID?.() || `${Date.now()}${Math.random()}`)
       .replace(/[^\w]/g, '')
@@ -967,13 +979,16 @@ export default function EditorPage() {
     next.set('collabHost', '1');
     setSp(next);
     showToast('Live Collab is ready — share the invitation code');
-  }, [sp, setSp, showToast]);
+  }, [sp, setSp, showToast, updateCollabEndpoint]);
 
   const leaveCollab = useCallback(async () => {
     const next = new URLSearchParams(sp);
     next.delete('room');
     next.delete('collabHost');
     setSp(next);
+    // Drop the stored endpoint too. Tunnel URLs from a finished session are dead
+    // (the hostname stops resolving), so keeping one would break the next join.
+    updateCollabEndpoint(null);
     if (hostingCollabRef.current && window.__TAURI_INTERNALS__) {
       hostingCollabRef.current = false;
       try {
@@ -983,18 +998,100 @@ export default function EditorPage() {
         console.error('[collab host stop]', error);
       }
     }
-  }, [sp, setSp]);
+  }, [sp, setSp, updateCollabEndpoint]);
 
   // New invitation codes carry both the room and its tunnel. Raw legacy room codes still work.
   const joinCollab = useCallback((input) => {
     const invitation = parseCollabInvite(input);
-    if (invitation.serverUrl) setCollabUrl(invitation.serverUrl);
+    if (invitation.serverUrl) updateCollabEndpoint(invitation.serverUrl);
     const next = new URLSearchParams(sp);
     next.set('room', invitation.room);
     next.delete('collabHost');
     hostingCollabRef.current = false;
     setSp(next);
-  }, [sp, setSp]);
+  }, [sp, setSp, updateCollabEndpoint]);
+
+  // Re-create the native host after a page/app reload. start_collab_host reuses
+  // a healthy runtime and creates a fresh one only when none exists.
+  useEffect(() => {
+    if (!room || !hostingCollabRef.current || !window.__TAURI_INTERNALS__) return undefined;
+    let cancelled = false;
+    import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke('start_collab_host'))
+      .then((host) => {
+        if (
+          !cancelled
+          && host?.serverUrl
+          && (
+            host.serverUrl !== collabPublicUrl
+            || (host.localServerUrl && host.localServerUrl !== collabConnectionUrl)
+          )
+        ) {
+          updateCollabEndpoint(host.serverUrl, host.localServerUrl || host.serverUrl);
+        }
+      })
+      .catch(error => {
+        if (!cancelled) console.error('[collab host restore]', error);
+      });
+    return () => { cancelled = true; };
+  }, [room, collabConnectionUrl, collabPublicUrl, updateCollabEndpoint]);
+
+  // The host talks to its embedded server over localhost, so a router DNS cache
+  // cannot break the editor. This independent check keeps the public invitation
+  // tunnel healthy and replaces it without resetting the active Yjs rooms.
+  useEffect(() => {
+    if (!room || !hostingCollabRef.current || !window.__TAURI_INTERNALS__) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let checking = false;
+    let interval = null;
+    let announcedRecovery = false;
+    setCollabRecovering(true);
+
+    const checkTunnel = async () => {
+      if (cancelled || checking) return;
+      checking = true;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const status = await invoke('collab_host_status');
+        if (cancelled) return;
+        if (status?.running && status?.reachable) {
+          setCollabRecovering(false);
+          return;
+        }
+
+        setCollabRecovering(true);
+        if (!announcedRecovery) {
+          announcedRecovery = true;
+          showToast('Tunnel interrupted — reconnecting automatically…');
+        }
+        const host = await invoke('restart_collab_tunnel');
+        if (cancelled) return;
+        if (!host?.serverUrl) throw new Error('Replacement tunnel returned no address.');
+        updateCollabEndpoint(host.serverUrl, host.localServerUrl || host.serverUrl);
+        setCollabRecovering(false);
+        announcedRecovery = false;
+        showToast('Tunnel restored — send the new invitation code');
+      } catch (error) {
+        if (!cancelled) {
+          setCollabRecovering(true);
+          console.error('[collab tunnel health]', error);
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    checkTunnel();
+    interval = setInterval(checkTunnel, 5000);
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+      setCollabRecovering(false);
+    };
+  }, [room, showToast, updateCollabEndpoint]);
 
   const handleNewStrat = () => {
     if (window.confirm('Create a new empty strat?')) {
@@ -1171,7 +1268,16 @@ export default function EditorPage() {
         />
       </aside>
 
-      <CollabBar collab={collab} room={room} onStart={startCollab} onJoin={joinCollab} onLeave={leaveCollab} onToast={showToast} />
+      <CollabBar
+        collab={collab}
+        room={room}
+        inviteServerUrl={collabPublicUrl}
+        recovering={collabRecovering}
+        onStart={startCollab}
+        onJoin={joinCollab}
+        onLeave={leaveCollab}
+        onToast={showToast}
+      />
 
       {/* Canvas */}
       <div ref={containerRef} className="editor-canvas-area"
@@ -1210,7 +1316,7 @@ export default function EditorPage() {
           try { opPayload     = JSON.parse(e.dataTransfer.getData('application/x-clav-operator')); } catch {}
           try { gadgetPayload = JSON.parse(e.dataTransfer.getData('application/x-clav-gadget'));   } catch {}
           if (opPayload?.op) {
-            setElements(prev => [...prev, { id: Date.now(), type: 'operator', op: opPayload.op, x: pt.x, y: pt.y, side: opPayload.side || side, color: opPayload.color || activeColor, floor: selectedFloor, mapId: selectedMap }]);
+            setElements(prev => [...prev, { id: createElementId(), type: 'operator', op: opPayload.op, x: pt.x, y: pt.y, side: opPayload.side || side, color: opPayload.color || activeColor, floor: selectedFloor, mapId: selectedMap }]);
             setPendingOp(null);
           } else {
             // draggingRef is set synchronously on dragstart (both gadget tab AND lineup),
@@ -1257,7 +1363,7 @@ export default function EditorPage() {
                     floor:selectedFloor, mapId:selectedMap,
                   }));
                 } else {
-                  setElements(prev => [...prev, { id: Date.now(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, floor: selectedFloor, mapId: selectedMap }]);
+                  setElements(prev => [...prev, { id: createElementId(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, floor: selectedFloor, mapId: selectedMap }]);
                 }
               }
             }

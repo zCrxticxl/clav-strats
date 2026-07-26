@@ -23,6 +23,9 @@ export function setCollabUrl(serverUrl) {
   } catch { /* ignore */ }
 }
 
+// How long to wait before telling the user the endpoint looks dead.
+export const UNREACHABLE_AFTER_MS = 8000;
+
 const NAMES  = ['Ash', 'Thatcher', 'Jäger', 'Bandit', 'Mute', 'Thermite', 'Zofia', 'Ela'];
 const COLORS = ['#E8B84B', '#4B9CE8', '#50E8A0', '#E84B4B', '#B04BE8', '#E8734B', '#41D6C3', '#F25C9A'];
 
@@ -35,6 +38,7 @@ function randomUser() {
  * useCollab — connects to a Yjs room and exposes shared maps + presence.
  *
  * @param {string|null} roomId  active room id, or null/'' for solo (no connection)
+ * @param {string|null} serverUrlOverride endpoint selected by hosting/joining
  * @returns {{
  *   enabled: boolean,
  *   connected: boolean,
@@ -47,8 +51,9 @@ function randomUser() {
  *   setPresence: (partial) => void,
  * }}
  */
-export function useCollab(roomId) {
+export function useCollab(roomId, serverUrlOverride = null) {
   const enabled = !!roomId;
+  const serverUrl = String(serverUrlOverride || getCollabUrl()).trim().replace(/\/$/, '');
   const selfRef = useRef(null);
   if (!selfRef.current) selfRef.current = randomUser();
 
@@ -57,52 +62,105 @@ export function useCollab(roomId) {
   const [connected, setConnected] = useState(false);
   const [synced, setSynced]       = useState(false);
   const [peers, setPeers]         = useState([]);
+  // y-websocket retries forever and stays silent about it. Without this the UI
+  // would sit on "connecting…" indefinitely when the endpoint is dead — e.g. an
+  // expired Cloudflare Quick Tunnel whose hostname no longer resolves.
+  const [unreachable, setUnreachable] = useState(false);
   const [, forceTick]             = useState(0);
 
   useEffect(() => {
     if (!enabled) return;
 
+    const url = serverUrl;
     const ydoc = new Y.Doc();
-    const provider = new WebsocketProvider(getCollabUrl(), `clav-strat-${roomId}`, ydoc);
-    docRef.current  = ydoc;
-    provRef.current = provider;
+    const provider = new WebsocketProvider(url, `clav-strat-${roomId}`, ydoc);
 
-    provider.awareness.setLocalStateField('user', selfRef.current);
+    // Handlers are declared up front so teardown can always detach them, even if
+    // setup throws before they are wired up.
+    let unreachableTimer = null;
+    let onStatus = null;
+    let onSync = null;
+    let onAwareness = null;
+    let destroyed = false;
 
-    const onStatus = ({ status }) => setConnected(status === 'connected');
-    provider.on('status', onStatus);
-
-    // 'sync' fires once the initial room state has been received — only then is
-    // it safe to push local state, otherwise an empty joiner could wipe the doc.
-    const onSync = (isSynced) => setSynced(isSynced);
-    provider.on('sync', onSync);
-
-    const onAwareness = () => {
-      const states = [];
-      provider.awareness.getStates().forEach((state, clientId) => {
-        if (clientId === provider.awareness.clientID) return;
-        if (!state.user) return;
-        states.push({ clientId, user: state.user, cursor: state.cursor || null, tool: state.tool || null });
-      });
-      setPeers(states);
+    const clearUnreachableTimer = () => {
+      if (unreachableTimer !== null) {
+        clearTimeout(unreachableTimer);
+        unreachableTimer = null;
+      }
     };
-    provider.awareness.on('change', onAwareness);
+    const armUnreachableTimer = () => {
+      clearUnreachableTimer();
+      unreachableTimer = setTimeout(() => {
+        if (!destroyed && !provider.wsconnected) setUnreachable(true);
+      }, UNREACHABLE_AFTER_MS);
+    };
 
-    forceTick(n => n + 1); // re-render so consumers pick up the now-ready maps
-
-    return () => {
-      provider.awareness.off('change', onAwareness);
-      provider.off('status', onStatus);
-      provider.off('sync', onSync);
+    // If anything below throws, React never receives the cleanup — the provider
+    // would then reconnect forever with no way to stop it (an invisible zombie
+    // socket until the page is reloaded). So teardown is callable at any point.
+    const teardown = () => {
+      destroyed = true;
+      clearUnreachableTimer();
+      if (onAwareness) provider.awareness.off('change', onAwareness);
+      if (onStatus) provider.off('status', onStatus);
+      if (onSync) provider.off('sync', onSync);
       provider.destroy();
       ydoc.destroy();
       docRef.current = null;
       provRef.current = null;
       setConnected(false);
       setSynced(false);
+      setUnreachable(false);
       setPeers([]);
     };
-  }, [enabled, roomId]);
+
+    try {
+      docRef.current  = ydoc;
+      provRef.current = provider;
+      setUnreachable(false);
+
+      armUnreachableTimer();
+
+      provider.awareness.setLocalStateField('user', selfRef.current);
+
+      onStatus = ({ status }) => {
+        const isConnected = status === 'connected';
+        setConnected(isConnected);
+        if (isConnected) {
+          clearUnreachableTimer();
+          setUnreachable(false);
+        } else {
+          setSynced(false);
+          armUnreachableTimer();
+        }
+      };
+      provider.on('status', onStatus);
+
+      // 'sync' fires once the initial room state has been received — only then is
+      // it safe to push local state, otherwise an empty joiner could wipe the doc.
+      onSync = (isSynced) => setSynced(isSynced);
+      provider.on('sync', onSync);
+
+      onAwareness = () => {
+        const states = [];
+        provider.awareness.getStates().forEach((state, clientId) => {
+          if (clientId === provider.awareness.clientID) return;
+          if (!state.user) return;
+          states.push({ clientId, user: state.user, cursor: state.cursor || null, tool: state.tool || null });
+        });
+        setPeers(states);
+      };
+      provider.awareness.on('change', onAwareness);
+
+      forceTick(n => n + 1); // re-render so consumers pick up the now-ready maps
+    } catch (error) {
+      teardown();
+      throw error;
+    }
+
+    return teardown;
+  }, [enabled, roomId, serverUrl]);
 
   const setPresence = useCallback((partial) => {
     const aw = provRef.current?.awareness;
@@ -115,6 +173,8 @@ export function useCollab(roomId) {
     enabled,
     connected,
     synced,
+    unreachable,
+    serverUrl: enabled ? serverUrl : null,
     self: selfRef.current,
     peers,
     ydoc,

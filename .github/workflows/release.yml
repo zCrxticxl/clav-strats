@@ -25,6 +25,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Run frontend tests
+        run: npm test -- --watchAll=false
+        env:
+          CI: true
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build & publish release
         uses: tauri-apps/tauri-action@v1
         env:

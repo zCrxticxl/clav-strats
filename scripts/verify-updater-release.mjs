@@ -23,7 +23,7 @@ function normalizeVersion(version) {
   return normalized;
 }
 
-async function fetchWithRetry(url) {
+async function fetchWithRetry(url, extraHeaders = {}) {
   let lastError;
 
   for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
@@ -32,6 +32,7 @@ async function fetchWithRetry(url) {
         headers: {
           'User-Agent': 'clav-strats-updater-verifier',
           'Cache-Control': 'no-cache',
+          ...extraHeaders,
         },
         redirect: 'follow',
       });
@@ -154,10 +155,22 @@ if (!platform?.url || !platform?.signature) {
   throw new Error('latest.json has no complete Windows x64 NSIS update entry');
 }
 
-const installerResponse = await fetchWithRetry(platform.url);
+// tauri-action writes the GitHub *API* asset url into latest.json. That endpoint
+// returns JSON metadata unless the octet-stream Accept header asks for the binary,
+// so without it we would be verifying the signature against ~2 KB of JSON instead
+// of the installer. The updater itself sends the same header.
+const installerResponse = await fetchWithRetry(platform.url, {
+  Accept: 'application/octet-stream',
+});
 const installer = Buffer.from(await installerResponse.arrayBuffer());
 if (installer.length === 0) {
   throw new Error('Published updater installer is empty');
+}
+if (installer.subarray(0, 2).toString('ascii') !== 'MZ') {
+  throw new Error(
+    `Downloaded updater artifact is not a Windows installer (${installer.length} bytes) `
+    + '— the asset url probably returned metadata instead of the binary',
+  );
 }
 
 verifyMinisign(installer, platform.signature, publicKey);

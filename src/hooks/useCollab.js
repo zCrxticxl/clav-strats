@@ -29,9 +29,34 @@ export const UNREACHABLE_AFTER_MS = 8000;
 const NAMES  = ['Ash', 'Thatcher', 'Jäger', 'Bandit', 'Mute', 'Thermite', 'Zofia', 'Ela'];
 const COLORS = ['#E8B84B', '#4B9CE8', '#50E8A0', '#E84B4B', '#B04BE8', '#E8734B', '#41D6C3', '#F25C9A'];
 
+// Display name shown to teammates. Persisted so it survives restarts.
+export const COLLAB_NAME_KEY = 'clav-collab-name';
+export const MAX_COLLAB_NAME_LENGTH = 24;
+
+export function normalizeCollabName(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_COLLAB_NAME_LENGTH);
+}
+
+export function getStoredCollabName() {
+  try {
+    return normalizeCollabName(localStorage.getItem(COLLAB_NAME_KEY)) || null;
+  } catch { return null; }
+}
+
+export function storeCollabName(name) {
+  try {
+    const value = normalizeCollabName(name);
+    if (value) localStorage.setItem(COLLAB_NAME_KEY, value);
+    else localStorage.removeItem(COLLAB_NAME_KEY);
+  } catch { /* ignore */ }
+}
+
 function randomUser() {
   const i = Math.floor(Math.random() * NAMES.length);
-  return { name: `${NAMES[i]}-${Math.floor(Math.random() * 900 + 100)}`, color: COLORS[i % COLORS.length] };
+  return {
+    name: getStoredCollabName() || `${NAMES[i]}-${Math.floor(Math.random() * 900 + 100)}`,
+    color: COLORS[i % COLORS.length],
+  };
 }
 
 /**
@@ -54,8 +79,9 @@ function randomUser() {
 export function useCollab(roomId, serverUrlOverride = null) {
   const enabled = !!roomId;
   const serverUrl = String(serverUrlOverride || getCollabUrl()).trim().replace(/\/$/, '');
-  const selfRef = useRef(null);
-  if (!selfRef.current) selfRef.current = randomUser();
+  const [self, setSelf] = useState(randomUser);
+  const selfRef = useRef(self);
+  selfRef.current = self;
 
   const docRef      = useRef(null);
   const provRef     = useRef(null);
@@ -168,6 +194,19 @@ export function useCollab(roomId, serverUrlOverride = null) {
     for (const [k, v] of Object.entries(partial)) aw.setLocalStateField(k, v);
   }, []);
 
+  // Rename yourself so teammates can tell who is who. Persists and broadcasts
+  // immediately; an empty name falls back to the generated one.
+  const setUserName = useCallback((name) => {
+    const value = normalizeCollabName(name);
+    setSelf(previous => {
+      const next = { ...previous, name: value || previous.name };
+      selfRef.current = next;
+      provRef.current?.awareness?.setLocalStateField('user', next);
+      return next;
+    });
+    storeCollabName(value);
+  }, []);
+
   const ydoc = docRef.current;
   return {
     enabled,
@@ -175,7 +214,8 @@ export function useCollab(roomId, serverUrlOverride = null) {
     synced,
     unreachable,
     serverUrl: enabled ? serverUrl : null,
-    self: selfRef.current,
+    self,
+    setUserName,
     peers,
     ydoc,
     yElements: ydoc ? ydoc.getMap('elements') : null,

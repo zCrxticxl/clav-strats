@@ -7,7 +7,7 @@ import { useCollab } from '../hooks/useCollab';
 import { CollabBar, CollabCursors } from '../components/editor/CollabUI';
 import { ALL_MAPS, MAP_BLUEPRINTS } from '../data/maps';
 import { ATTACKERS, DEFENDERS } from '../data/operators';
-import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES } from '../data/gadgets';
+import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES, GADGETS } from '../data/gadgets';
 
 import { MAP_WALLS } from '../data/walls';
 import { exportStratAsPNG } from '../utils/exportPng';
@@ -226,6 +226,9 @@ export default function EditorPage() {
   const [currentPath, setCurrentPath] = useState(null);
   const [marquee, setMarquee]         = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [routeDraft, setRouteDraft]   = useState(null); // { points:[], color, width } — click-to-add waypoints
+  const [routeCursor, setRouteCursor] = useState(null); // live preview point to cursor
+  const routeDraftRef = useRef(null);
   const drawStartRef = useRef(null);
   const dragRef      = useRef(null);
 
@@ -319,16 +322,18 @@ export default function EditorPage() {
   // Count reinforcements across ALL floors of this strat (max 10 is per-strat, not per-floor)
   const reinforceCount  = elements.filter(e => e.type === 'reinforcement' && (!e.mapId || e.mapId === selectedMap)).length;
 
-  // Gadget placement counts per player color+gadget for lineup strip display
+  // Gadget placement counts per player color+gadget for lineup strip display.
+  // Counted across ALL floors of this map (limits are per-strat, not per-floor).
   const gadgetCounts = useMemo(() => {
     const counts = {};
-    visibleElements.forEach(el => {
+    elements.forEach(el => {
       if (el.type !== 'gadget') return;
+      if (el.mapId && el.mapId !== selectedMap) return;
       const key = `${el.color}:${el.gadget?.id}`;
       counts[key] = (counts[key] || 0) + 1;
     });
     return counts;
-  }, [visibleElements]);
+  }, [elements, selectedMap]);
 
   // ── inject lineup from URL param (coming from LineupPage) ──────────────
   useEffect(() => {
@@ -624,8 +629,15 @@ export default function EditorPage() {
 
   // ── Drag start helper ────────────────────────────────────────────────────
   const startDrag = (e, elementId) => {
-    if (activeTool !== 'select') return false;
     if (e.button !== 0) return false;
+    // Alt+click = recolor to the active player's color (whole selection if it's part of one).
+    if (e.altKey) {
+      e.stopPropagation();
+      const ids = selectedIds.includes(elementId) && selectedIds.length > 1 ? selectedIds : [elementId];
+      setElements(prev => prev.map(el => ids.includes(el.id) && el.color ? { ...el, color: activeColor } : el), { groupKey: 'recolor' });
+      return true;
+    }
+    if (activeTool !== 'select') return false;
     e.stopPropagation();
     if (e.shiftKey) {
       setSelectedIds(prev => prev.includes(elementId)
@@ -696,7 +708,15 @@ export default function EditorPage() {
       drawStartRef.current = pt;
       return;
     }
-    if (['arrow','route','zone'].includes(activeTool)) {
+    if (activeTool === 'route') {
+      // Click adds a waypoint; double-click / Enter finishes the route.
+      setRouteDraft(prev => prev
+        ? { ...prev, points: [...prev.points, pt] }
+        : { points: [pt], color: activeColor, width: strokeWidth });
+      setRouteCursor(pt);
+      return;
+    }
+    if (['arrow','zone'].includes(activeTool)) {
       isDrawingRef.current = true; setIsDrawing(true);
       drawStartRef.current = pt;
       setCurrentPath({ type: activeTool, x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y, points: [pt], color: activeColor, width: strokeWidth, shift: e.shiftKey });
@@ -710,6 +730,9 @@ export default function EditorPage() {
         cursorThrottleRef.current = now;
         collab.setPresence({ cursor: toCanvas(e.clientX, e.clientY), tool: activeTool });
       }
+    }
+    if (activeTool === 'route' && routeDraftRef.current) {
+      setRouteCursor(toCanvas(e.clientX, e.clientY));
     }
     if (['rotate','headline','feetline'].includes(activeTool) && !isDrawing && !dragRef.current) {
       const pt   = toCanvas(e.clientX, e.clientY);
@@ -810,10 +833,52 @@ export default function EditorPage() {
 
   const handleElClick = (e, id) => {
     e.stopPropagation();
+    if (e.altKey) return; // Alt+click is handled as recolor in startDrag
     if (activeTool === 'eraser') { setElements(prev => prev.filter(el => el.id !== id)); return; }
     if (activeTool === 'reinforcement') { setElements(prev => prev.map(el => el.id === id && el.type === 'reinforcement' ? { ...el, horizontal: !el.horizontal } : el)); return; }
     if (activeTool === 'select') setSelectedIds([id]);
   };
+
+  // ── Route: click-to-add waypoints ────────────────────────────────────────
+  useEffect(() => { routeDraftRef.current = routeDraft; }, [routeDraft]);
+
+  const finishRoute = useCallback(() => {
+    const draft = routeDraftRef.current;
+    setRouteDraft(null);
+    setRouteCursor(null);
+    if (!draft) return;
+    // Collapse consecutive near-identical points (e.g. the two clicks of a double-click)
+    const pts = draft.points.filter((p, i, a) => i === 0 || Math.hypot(p.x - a[i-1].x, p.y - a[i-1].y) > 0.3);
+    if (pts.length >= 2) {
+      setElements(prev => [...prev, {
+        id: Date.now(), type: 'route', points: pts,
+        color: draft.color, width: draft.width,
+        floor: floorRef.current, mapId: mapRef.current,
+      }]);
+    }
+  }, [setElements]);
+
+  // Cancel the draft when leaving the route tool
+  useEffect(() => {
+    if (activeTool !== 'route') { setRouteDraft(null); setRouteCursor(null); }
+  }, [activeTool]);
+
+  // Keyboard while drafting a route: Enter/finish, Esc/cancel, Backspace/undo point
+  useEffect(() => {
+    if (!routeDraft) return;
+    const onKey = (e) => {
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+      if (e.key === 'Enter')      { e.preventDefault(); finishRoute(); }
+      else if (e.key === 'Escape'){ e.preventDefault(); setRouteDraft(null); setRouteCursor(null); }
+      else if (e.key === 'Backspace') {
+        e.preventDefault();
+        setRouteDraft(p => p && p.points.length > 1 ? { ...p, points: p.points.slice(0, -1) } : null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [routeDraft, finishRoute]);
 
   const submitText = () => {
     if (textInput.val.trim()) {
@@ -1036,6 +1101,7 @@ export default function EditorPage() {
       return <text key={key} x={`${el.x}%`} y={`${el.y}%`} fill={el.color} fontSize="14" fontFamily="'Share Tech Mono',monospace" style={{userSelect:'none',cursor:'pointer',...glow}} onClick={onClick} onMouseDown={onMd}>{el.text}</text>;
     }
     if (el.type === 'reinforcement') {
+      if (el.wallId) return null; // wall-attached: rendered by InteractiveWall
       const s = el.scale || 1;
       const w = (el.w != null ? el.w : (el.horizontal ? 3.0 : 0.65)) * s;
       const h = (el.h != null ? el.h : (el.horizontal ? 0.65 : 3.0)) * s;
@@ -1062,6 +1128,7 @@ export default function EditorPage() {
       );
     }
     if (el.type === 'barricade') {
+      if (el.wallId) return null; // opening-attached: rendered by InteractiveWall
       const s = el.scale || 1;
       const bw = (el.w != null ? Math.max(el.w, 1.0) : 1.2) * s;
       const bh = (el.h != null ? Math.max(el.h, 1.0) : 2.4) * s;
@@ -1158,6 +1225,7 @@ export default function EditorPage() {
       );
     }
     if (el.type === 'gadget') {
+      if (el.wallId) return null; // snapped to an opening: rendered by InteractiveWall
       const gs  = 3.4 * (el.scale || 1);
       const pad = gs * 0.1;
       const rot = el.rotation || 0;
@@ -1365,6 +1433,13 @@ export default function EditorPage() {
             <div style={{fontSize:11,color:'#50E8A0',fontFamily:'var(--font-mono)',lineHeight:1.5}}>↕ Drag operator cards from the list onto the map</div>
           </div>
         )}
+        {activeTool==='route' && (
+          <div className="sidebar-section" style={{background:'rgba(232,184,75,0.08)',borderColor:'rgba(232,184,75,0.35)'}}>
+            <div style={{fontSize:11,color:'var(--accent-gold)',fontFamily:'var(--font-mono)',lineHeight:1.6}}>
+              Click to set waypoints · Double-click or Enter to finish · Backspace = undo point · Esc = cancel
+            </div>
+          </div>
+        )}
       </aside>
 
       <CollabBar collab={collab} room={room} onStart={startCollab} onJoin={joinCollab} onLeave={leaveCollab} onToast={showToast} />
@@ -1373,7 +1448,8 @@ export default function EditorPage() {
       <div ref={containerRef} className="editor-canvas-area"
         style={{cursor:getCursor(),overflow:'hidden',position:'relative',userSelect:'none'}}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
-        onContextMenu={e => e.preventDefault()}
+        onDoubleClick={() => { if (routeDraftRef.current) finishRoute(); }}
+        onContextMenu={e => { e.preventDefault(); if (routeDraftRef.current) finishRoute(); }}
         onMouseLeave={e => { onMouseUp(e); setSnapHover(null); }}
         onDragOver={e => {
           e.preventDefault(); e.dataTransfer.dropEffect='copy';
@@ -1394,8 +1470,15 @@ export default function EditorPage() {
             setElements(prev => [...prev, { id: Date.now(), type: 'operator', op: opPayload.op, x: pt.x, y: pt.y, side: opPayload.side || side, color: opPayload.color || activeColor, floor: selectedFloor, mapId: selectedMap }]);
             setPendingOp(null);
           } else {
-            const g = gadgetPayload?.gadget || draggingGadget?.gadget;
-            const c = gadgetPayload?.color  || draggingGadget?.color || activeColor;
+            // draggingRef is set synchronously on dragstart (both gadget tab AND lineup),
+            // so it's reliable on the very first drag — unlike the async draggingGadget
+            // state or the webview's flaky custom-MIME dataTransfer.
+            const rawG = gadgetPayload?.gadget || draggingRef.current?.gadget || draggingGadget?.gadget;
+            // Resolve against the current gadget definition (id) so a gadget dragged
+            // from the lineup — where the stored object may predate placement/count
+            // changes — behaves identically to one from the gadget tab.
+            const g = (rawG && GADGETS[rawG.id]) || rawG;
+            const c = gadgetPayload?.color  || draggingRef.current?.color || draggingGadget?.color || activeColor;
             if (g) {
               // Opening-only gadgets: snap to nearest door/window marker
               if (g.placement === 'opening') {
@@ -1417,7 +1500,7 @@ export default function EditorPage() {
                 setDraggingGadget(null); setDragPreview(null);
                 return;
               }
-              const placed = elements.filter(el => el.type==='gadget' && el.gadget?.id===g.id && el.color===c && el.floor===selectedFloor && (!el.mapId || el.mapId===selectedMap)).length;
+              const placed = elements.filter(el => el.type==='gadget' && el.gadget?.id===g.id && el.color===c && (!el.mapId || el.mapId===selectedMap)).length;
               // Lineup-aware limit: if player has an operator, only allow gadgets from their loadout
               const player = lineup.find(p => p.color === c);
               let limit = g.count ?? 99;
@@ -1527,6 +1610,18 @@ export default function EditorPage() {
                   return renderEl(el);
                 })}
                 {currentPath && renderEl(currentPath, true)}
+                {routeDraft && (() => {
+                  const pts = [...routeDraft.points, ...(routeCursor ? [routeCursor] : [])];
+                  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x}% ${p.y}%`).join(' ');
+                  return (
+                    <g style={{ pointerEvents: 'none' }}>
+                      <path d={d} stroke={routeDraft.color} strokeWidth={routeDraft.width || 3} strokeDasharray="5 3" strokeLinecap="round" fill="none" opacity="0.9"/>
+                      {routeDraft.points.map((p, i) => (
+                        <circle key={i} cx={`${p.x}%`} cy={`${p.y}%`} r="0.7%" fill={routeDraft.color} stroke="#0b0d11" strokeWidth="1"/>
+                      ))}
+                    </g>
+                  );
+                })()}
                 {snapHover && (
                   <g style={{ pointerEvents:'none' }}>
                     <rect

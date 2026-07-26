@@ -151,7 +151,7 @@ export default function WallEditorPage() {
 
   const saveWalls = (updated) => {
     setWalls(updated);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); } catch (e) { console.error(e); }
     autoWriteToFile(updated);
   };
 
@@ -353,7 +353,7 @@ export default function WallEditorPage() {
   };
 
   const handleSaveLocal = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(walls));
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(walls)); } catch (e) { console.error(e); }
     showToast('Walls saved locally');
   };
 

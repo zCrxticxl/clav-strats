@@ -11,7 +11,12 @@ export function useStrats() {
   });
 
   useEffect(() => {
-    localStorage.setItem('clav-strats', JSON.stringify(strats));
+    // Never let a storage write (e.g. quota exceeded) crash the whole app.
+    try {
+      localStorage.setItem('clav-strats', JSON.stringify(strats));
+    } catch (e) {
+      console.error('[useStrats] save failed:', e);
+    }
   }, [strats]);
 
   const saveStrat = (strat) => {

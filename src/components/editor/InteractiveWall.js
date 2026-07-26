@@ -37,7 +37,12 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
     }
     if (activeTool === 'reinforcement' && (w.type === 'wall' || w.type === 'hatch')) {
       if (existing?.type === 'reinforcement') {
-        setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, horizontal: !el.horizontal } : el));
+        // Different color → reassign to that player. Same color → toggle orientation.
+        if (existing.color !== activeColor) {
+          setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, color: activeColor } : el));
+        } else {
+          setElements(prev => prev.map(el => el.wallId === w.id ? { ...el, horizontal: !el.horizontal } : el));
+        }
         return;
       }
       if (reinforceCount >= 10) { showToast('Max 10 Reinforcements!'); return; }
@@ -56,8 +61,14 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
     if (pendingIsOpeningGadget && isOpening && pendingGadget) {
       const gadgetEl = elements.find(e => e.wallId === w.id && e.type === 'gadget');
       if (gadgetEl) {
-        // Remove existing gadget on this opening
-        setElements(prev => prev.filter(el => el.wallId !== w.id || el.type !== 'gadget'));
+        if (gadgetEl.gadget?.id === pendingGadget.id && gadgetEl.color === activeColor) {
+          // Same gadget + same color → remove (toggle off)
+          setElements(prev => prev.filter(el => el.wallId !== w.id || el.type !== 'gadget'));
+        } else {
+          // Different color or gadget → reassign to this player / swap gadget
+          setElements(prev => prev.map(el => (el.wallId === w.id && el.type === 'gadget')
+            ? { ...el, gadget: pendingGadget, color: activeColor } : el));
+        }
       } else {
         setElements(prev => [...prev, {
           id: Date.now(), type: 'gadget', wallId: w.id,
@@ -116,8 +127,8 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
   // Doors: scale with map aspect ratio so they look correct in screen pixels.
   // 1% x-width ≠ 1% y-height on non-square maps; compensate so a door appears ~2:1 (tall:wide).
   const ar       = imgAspect || 1.5;
-  const doorW    = w.horizontal ? (2.0 / ar) : 1.0;
-  const doorH    = w.horizontal ? 1.0 : (2.0 * ar);
+  const doorW    = w.horizontal ? (3.4 / ar) : 1.6;
+  const doorH    = w.horizontal ? 1.6 : (3.4 * ar);
 
   return (
     <g
@@ -220,10 +231,10 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
       {/* Door / Window — only render when something placed OR tool can interact */}
       {isOpening && (hasBarricade || gadgetOnOpening || canInteract) && (() => {
         // Use actual door dims; only apply a small minimum so tiny detections stay clickable
-        const bw = doorW * 1.05;
-        const bh = doorH * 1.05;
-        const ow = hasBarricade ? bw : Math.max(doorW, 1.0);
-        const oh = hasBarricade ? bh : Math.max(doorH, 1.0);
+        const bw = doorW * 1.1;
+        const bh = doorH * 1.1;
+        const ow = hasBarricade ? bw : Math.max(doorW, 1.6);
+        const oh = hasBarricade ? bh : Math.max(doorH, 1.6);
         return (
           <>
             {hasBarricade && (() => {
@@ -239,7 +250,15 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
                     x={`${w.x - bw/2}%`} y={`${w.y - bh/2}%`}
                     width={`${bw}%`} height={`${bh}%`}
                     fill={`url(#${pid})`}
+                    stroke={existing.color}
+                    strokeWidth="1.5"
                     rx="0.3"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  <rect
+                    x={`${w.x - bw/2}%`} y={`${w.y - bh/2}%`}
+                    width={`${bw}%`} height={`${bh}%`}
+                    fill={existing.color + '44'} rx="0.3"
                     style={{ pointerEvents: 'none' }}
                   />
                   <text
@@ -255,20 +274,27 @@ export function InteractiveWall({ w, activeTool, activeColor, elements, setEleme
               <rect
                 x={`${w.x - ow/2}%`} y={`${w.y - oh/2}%`}
                 width={`${ow}%`} height={`${oh}%`}
-                fill={baseColor + '18'}
+                fill={baseColor + '2E'}
                 stroke={baseColor}
-                strokeWidth="0.8"
-                strokeDasharray="2 1.5"
+                strokeWidth="1.6"
+                strokeDasharray="2.5 1.5"
                 rx="0.3"
               />
             )}
-            {/* Opening gadget */}
+            {/* Opening gadget — colored box + icon (matches free gadgets) */}
             {gadgetOnOpening && gadgetOnOpening.gadget?.icon && (
-              <image
-                href={gadgetOnOpening.gadget.icon}
-                x={`${w.x - 1.2}%`} y={`${w.y - 1.2}%`} width="2.4%" height="2.4%"
-                style={{ pointerEvents: 'none' }}
-              />
+              <>
+                <rect
+                  x={`${w.x - 1.6}%`} y={`${w.y - 1.6}%`} width="3.2%" height="3.2%"
+                  fill="rgba(8,10,14,0.85)" stroke={gadgetOnOpening.color} strokeWidth="1.5" rx="0.5"
+                  style={{ pointerEvents: 'none' }}
+                />
+                <image
+                  href={gadgetOnOpening.gadget.icon}
+                  x={`${w.x - 1.3}%`} y={`${w.y - 1.3}%`} width="2.6%" height="2.6%"
+                  style={{ pointerEvents: 'none' }}
+                />
+              </>
             )}
             {/* Transparent click target */}
             <rect

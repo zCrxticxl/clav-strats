@@ -106,9 +106,13 @@ function buildFloorSVG(W, H, elements) {
     }
     if (el.type === 'gadget' && el.gadget?.icon) {
       const gs = 3.4 * (el.scale || 1);
+      const pad = gs * 0.1;
       const rot = el.rotation || 0;
-      return `<image href="${el.gadget.icon}" x="${el.x - gs/2}%" y="${el.y - gs/2}%" width="${gs}%" height="${gs}%"
-        style="filter:drop-shadow(0 0 3px ${c})${rot ? `;transform:rotate(${rot}deg);transform-box:fill-box;transform-origin:50% 50%` : ''}"/>`;
+      const box = `<rect x="${el.x - gs/2}%" y="${el.y - gs/2}%" width="${gs}%" height="${gs}%" fill="rgba(8,10,14,0.85)" stroke="${c}" stroke-width="0.25%" rx="0.6"/>`;
+      const img = `<image href="${el.gadget.icon}" x="${el.x - gs/2 + pad}%" y="${el.y - gs/2 + pad}%" width="${gs - pad*2}%" height="${gs - pad*2}%"/>`;
+      return rot
+        ? `<g style="transform:rotate(${rot}deg);transform-box:fill-box;transform-origin:50% 50%">${box}${img}</g>`
+        : `${box}${img}`;
     }
     if (el.type === 'arrow' && el.points?.length >= 2) {
       const pts = el.points.map(p => `${p.x}%,${p.y}%`).join(' ');
@@ -140,6 +144,7 @@ function buildFloorSVG(W, H, elements) {
       const tgx = -Math.sin(endA), tgy = Math.cos(endA), as = r*0.35;
       return `<path d="M ${el.x + r*Math.cos(startA)}% ${el.y + r*Math.sin(startA)}% A ${r}% ${r}% 0 1 1 ${ax2}% ${ay2}%" fill="none" stroke="${c}" stroke-width="0.3%" stroke-linecap="round"/>
       <polygon points="${ax2}%,${ay2}% ${ax2-(tgx*as+tgy*as*0.5)}%,${ay2-(tgy*as-tgx*as*0.5)}% ${ax2-(tgx*as-tgy*as*0.5)}%,${ay2-(tgy*as+tgx*as*0.5)}%" fill="${c}"/>
+      <circle cx="${el.x}%" cy="${el.y}%" r="1.5%" fill="${c}33" stroke="${c}" stroke-width="0.15%"/>
       <image href="/icons/game_r6_rotate_vkme7.webp" x="${el.x-2}%" y="${el.y-2}%" width="4%" height="4%" preserveAspectRatio="xMidYMid meet"/>`;
     }
     return '';

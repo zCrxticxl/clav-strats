@@ -108,6 +108,12 @@ export function CollabBar({
     }
   };
 
+  const renameSelf = () => {
+    const next = window.prompt('Your name (teammates see this):', collab.self?.name || '');
+    if (next === null) return;
+    collab.setUserName?.(next);
+  };
+
   const dotColor = recovering ? '#4B9CE8' : collab.unreachable ? '#E84B4B' : collab.connected ? '#50E8A0' : '#E8B84B';
   const statusLabel = recovering
     ? 'repairing…'
@@ -130,22 +136,33 @@ export function CollabBar({
         {statusLabel}
       </span>
 
-      {/* self + peer avatars */}
+      {/* self + peer avatars — click your own to rename yourself */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
-        {[{ clientId: 'self', user: collab.self }, ...collab.peers].map((p, i) => (
-          <div key={p.clientId}
-            title={p.clientId === 'self' ? `${p.user.name} (you)` : p.user.name}
-            style={{
-              width: 22, height: 22, borderRadius: '50%', background: p.user.color,
-              color: '#0b0d11', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 9, fontWeight: 800, border: '1.5px solid #0b0d11',
-              marginLeft: i === 0 ? 0 : -6,
-            }}>
-            {initials(p.user.name)}
-          </div>
-        ))}
+        {[{ clientId: 'self', user: collab.self }, ...collab.peers].map((p, i) => {
+          const isSelf = p.clientId === 'self';
+          return (
+            <div key={p.clientId}
+              onClick={isSelf ? renameSelf : undefined}
+              title={isSelf ? `${p.user.name} (you) — click to rename` : p.user.name}
+              style={{
+                width: 22, height: 22, borderRadius: '50%', background: p.user.color,
+                color: '#0b0d11', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 9, fontWeight: 800, border: '1.5px solid #0b0d11',
+                marginLeft: i === 0 ? 0 : -6,
+                cursor: isSelf ? 'pointer' : 'default',
+              }}>
+              {initials(p.user.name)}
+            </div>
+          );
+        })}
         <span style={{ marginLeft: 8, color: 'var(--text-muted, #8a93a3)' }}>{collab.peers.length + 1}</span>
       </div>
+
+      <button className="topbar-btn" onClick={renameSelf}
+        title="Change the name teammates see"
+        style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        ✎ {collab.self?.name}
+      </button>
 
       <button
         className="topbar-btn"

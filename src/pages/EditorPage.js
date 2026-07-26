@@ -940,10 +940,11 @@ export default function EditorPage() {
   }, [elements, lineupsByContext, stratName, side, selectedFloor, description, tags]); // eslint-disable-line
 
   // ── collab sync: remote → local (observe Yjs, apply without history push) ──
+  // The floor is deliberately NOT shared: teammates need to work on different
+  // floors at the same time, so each client keeps its own view of the map.
   const applyCollabMeta = useCallback((yMeta) => {
     if (yMeta.has('name')) setStratName(yMeta.get('name'));
     if (yMeta.has('side')) setSide(yMeta.get('side'));
-    if (yMeta.has('floor')) setSelectedFloor(yMeta.get('floor'));
     if (yMeta.has('map')) setSelectedMap(yMeta.get('map'));
     if (yMeta.has('description')) setDescription(yMeta.get('description'));
     if (yMeta.has('tags')) setTags(yMeta.get('tags'));
@@ -951,8 +952,8 @@ export default function EditorPage() {
 
   // ── collab: once initial state has synced, pull it, then allow local pushes ─
   const collabMeta = useMemo(() => ({
-    name: stratName, side, floor: selectedFloor, map: selectedMap, description, tags,
-  }), [stratName, side, selectedFloor, selectedMap, description, tags]);
+    name: stratName, side, map: selectedMap, description, tags,
+  }), [stratName, side, selectedMap, description, tags]);
   useEditorCollaboration({
     collab, room, elements, lineupsByContext, meta: collabMeta, history,
     applyingRemoteRef, metaApplyingRef, canPushRef, setMeta: applyCollabMeta,

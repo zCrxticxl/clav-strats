@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { syncYMap, yMapKeys, yMapToObject } from '../utils/collabSync';
 
 export function useEditorCollaboration({
@@ -6,6 +6,11 @@ export function useEditorCollaboration({
   applyingRemoteRef, metaApplyingRef, canPushRef, setMeta,
 }) {
   const applyRemote = history.applyRemote;
+  // canPushRef alone is not reactive: when it flips to true after the initial
+  // sync, the push effects below would not re-run, so anything drawn *before*
+  // joining would never reach the room. This counter makes that moment a
+  // dependency, forcing one push of the current state right after syncing.
+  const [pushGeneration, setPushGeneration] = useState(0);
   // Keys this client has already observed. Only those may be deleted on push,
   // so concurrent additions by a peer are never swept away (see syncYMap).
   const knownElementKeysRef = useRef(new Set());
@@ -52,6 +57,11 @@ export function useEditorCollaboration({
   }, [room, canPushRef]);
 
   useEffect(() => {
+    if (!collab.synced) return;
+    setPushGeneration(generation => generation + 1);
+  }, [collab.synced, collab.ydoc]);
+
+  useEffect(() => {
     const { yElements, yLineups, yMeta } = collab;
     if (!collab.synced || !yElements) return;
     applyingRemoteRef.current = true;
@@ -74,7 +84,7 @@ export function useEditorCollaboration({
       elements.filter(el => el.id != null).map(el => [el.id, el]),
       knownElementKeysRef.current,
     );
-  }, [elements, collab.ydoc, collab.yElements, canPushRef, applyingRemoteRef]);
+  }, [elements, pushGeneration, collab.ydoc, collab.yElements, canPushRef, applyingRemoteRef]);
 
   useEffect(() => {
     const { yLineups, ydoc } = collab;
@@ -82,12 +92,12 @@ export function useEditorCollaboration({
     knownLineupKeysRef.current = syncYMap(
       ydoc, yLineups, Object.entries(lineupsByContext), knownLineupKeysRef.current,
     );
-  }, [lineupsByContext, collab.ydoc, collab.yLineups, canPushRef, applyingRemoteRef]);
+  }, [lineupsByContext, pushGeneration, collab.ydoc, collab.yLineups, canPushRef, applyingRemoteRef]);
 
   // Meta always pushes the same fixed key set, so it has no concurrent-add race.
   useEffect(() => {
     const { yMeta, ydoc } = collab;
     if (!yMeta || !ydoc || !canPushRef.current || metaApplyingRef.current) return;
     syncYMap(ydoc, yMeta, Object.entries(meta));
-  }, [meta, collab.ydoc, collab.yMeta, canPushRef, metaApplyingRef]);
+  }, [meta, pushGeneration, collab.ydoc, collab.yMeta, canPushRef, metaApplyingRef]);
 }

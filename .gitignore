@@ -22,8 +22,10 @@
 **/.claude/
 **/.codex/
 
-# misc
-.env.local
+# local environment (copy .env.example; never commit real values)
+.env
+.env.*
+!.env.example
 .DS_Store
 *.log
 npm-debug.log*

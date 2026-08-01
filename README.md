@@ -1,76 +1,68 @@
-# Clav.Strats — Rainbow Six Siege Strategy Builder
+# Clav.Strats
 
-A full-featured tactical strategy builder for Rainbow Six Siege, inspired by Stratforge.gg and r6strat.com.
+Cross-platform Rainbow Six Siege strategy planner with a map editor, a local strategy library, import/export, and optional live collaboration. Built with React and Tauri.
 
-<a href="https://www.buymeacoffee.com/zCrxticxl"><img src="https://img.buymeacoffee.com/button-api/?text=donation for the work :)&emoji=&slug=zCrxticxl&button_colour=FF5F5F&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" /></a>
+> **Status:** actively developed. Strategies are stored locally by default; collaboration is optional and requires a separately configured server.
 
-## Features
-- 🗺️ **Map Editor** — Draw arrows, routes, zones, and text on the competitive map pool
-- 👤 **Operator Placement** — All R6 operators with icons from the community r6operators library
-- 📂 **Strat Library** — Save, search, filter, and JSON export/import your strats locally
-- 🏷️ **Tags & Metadata** — Side (ATK/DEF), tags, description per strat
-- 💾 **Auto-Save** — All data stored in browser localStorage
+## What it does
 
-## Competitive Map Pool
-Bank · Border · Chalet · Clubhouse · Consulate · Fortress · Kafe Dostoyevsky · Nighthaven Labs
+- Draw routes, zones, arrows, text, and tactical callouts on competitive-map blueprints.
+- Place operators and gadgets, then save, search, filter, import, and export strategies.
+- Work offline with local storage, or connect to a collaboration server for shared editing.
+- Package the app as a Windows desktop app through Tauri.
 
-_Ranked maps (Oregon, Kanal, Coastline, etc.) are not shipped yet — blueprints
-are added by dropping `.webp` files in `/public/blueprints/` and extending
-`RANKED_MAPS` + `MAP_BLUEPRINTS` in `src/data/maps.js`._
+## Quick start
 
-## Local Setup
+### Web development
 
-### Requirements
-- Node.js 18+ (https://nodejs.org)
-- npm (comes with Node.js)
-
-### Installation
+Requires Node.js 20+ and npm.
 
 ```bash
-# 1. Navigate to the project folder
+git clone https://github.com/zCrxticxl/clav-strats.git
 cd clav-strats
-
-# 2. Install dependencies
-npm install
-
-# 3. Start local development server
+cp .env.example .env
+npm ci
 npm start
 ```
 
-The app will open automatically at http://localhost:3000
+The development server runs at `http://localhost:3000`.
 
-## Project Structure
+### Desktop development
 
-```
-clav-strats/
-├── src/
-│   ├── App.js           — Main app + navigation
-│   ├── App.css          — Global styles (dark tactical theme)
-│   ├── index.js         — React entry point
-│   ├── data/
-│   │   ├── maps.js      — All R6 maps + blueprint URLs
-│   │   └── operators.js — All operators + icon URLs
-│   ├── hooks/
-│   │   └── useStrats.js — LocalStorage strat management
-│   └── pages/
-│       ├── HomePage.js  — Map selection landing page
-│       ├── LibraryPage.js — Browse & search strats
-│       └── EditorPage.js  — Full canvas editor
-└── public/
-    └── index.html
+Install the Rust stable toolchain and the Tauri prerequisites for your operating system, then run:
+
+```bash
+npm run tauri dev
 ```
 
-## Asset Credits
-- **Map Blueprints**: r6maps.com (community reference tool)
-- **Operator Icons**: github.com/marcopixel/r6operators (CC BY 4.0)
+## Data and collaboration
 
-## Next Steps (Backend)
-When ready to add a backend:
-1. Node.js + Express API
-2. PostgreSQL + Prisma for strat storage
-3. User auth (JWT)
-4. Share links
-5. Docker + Nginx for VPS deployment
+Local mode stores strategies in the browser profile. Use JSON export before clearing browser data or moving to another device.
 
-## Domain Setup (Later)
-When deploying to your VPS, point `Clav.Strats.com` DNS A record to your server IP and configure Nginx to serve the built React app.
+To enable collaboration, set `REACT_APP_COLLAB_URL` in `.env` to a trusted WebSocket endpoint, then start the collaboration service as documented in [COLLAB.md](COLLAB.md). Do not publish an unauthenticated collaboration endpoint.
+
+## Quality checks
+
+```bash
+npm test -- --watchAll=false
+npm run build
+```
+
+CI runs the test suite and production build for every pull request and push to `main`.
+
+## Project documentation
+
+- [Architecture](ARCHITECTURE.md)
+- [Collaboration setup](COLLAB.md)
+- [Tauri desktop build](TAURI.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+## Credits
+
+- Map blueprints: [r6maps.com](https://r6maps.com/) (community reference tool)
+- Operator icons: [marcopixel/r6operators](https://github.com/marcopixel/r6operators) (CC BY 4.0)
+
+## License and commercial use
+
+Clav.Strats is source-available under the included [PolyForm Noncommercial License 1.0.0](LICENSE). Private and other non-commercial use is permitted. Commercial use, redistribution in paid offerings, managed-service use, and enterprise deployment require a separate written agreement; see [commercial licensing](COMMERCIAL-LICENSING.md).

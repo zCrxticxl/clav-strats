@@ -10,12 +10,12 @@ export const WALL_COLORS = {
   wall: '#E8B84B',
   hatch: '#E87B4B',
   door: '#4B9CE8',
-  window: '#4B9CE8', // same as door — treated as one type
+  window: '#4B9CE8', // Same color as a door.
   softwall: '#B04BE8',
 };
 
 export function InteractiveWall({
-  w, activeTool, activeColor, elements, setElements, reinforceCount, showToast,
+  w, activeTool, activeColor, activeOwnerId, elements, setElements, reinforceCount, showToast,
   selectedFloor, selectedMap, onHoverChange, pendingGadget, imgAspect,
   selectedIds = [], onSelectElement,
 }) {
@@ -29,7 +29,7 @@ export function InteractiveWall({
   const handleContextMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // always try to remove — filter is idempotent; keep same ref if nothing matched
+    // Filter is idempotent, so removing an empty marker is safe.
     setElements(prev => {
       const next = prev.filter(el => el.wallId !== w.id);
       return next.length === prev.length ? prev : next;
@@ -39,7 +39,7 @@ export function InteractiveWall({
   const handleClick = (e) => {
     e.stopPropagation();
 
-    if (activeTool === 'select' && clickedElement?.color && clickedElement.color !== activeColor) {
+    if (activeTool === 'select' && clickedElement?.type !== 'gadget' && clickedElement?.color && clickedElement.color !== activeColor) {
       setElements(prev => recolorElements(prev, [clickedElement.id], activeColor));
       return;
     }
@@ -52,7 +52,7 @@ export function InteractiveWall({
       if (reinforcementOnMarker) {
         // Different color → reassign to that player. Same color → toggle orientation.
         if (reinforcementOnMarker.color !== activeColor) {
-          setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'reinforcement' ? { ...el, color: activeColor } : el));
+          setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'reinforcement' ? { ...el, color: activeColor, ownerId: activeOwnerId || el.ownerId } : el));
         } else {
           setElements(prev => prev.map(el => el.wallId === w.id && el.type === 'reinforcement' ? { ...el, horizontal: !el.horizontal } : el));
         }
@@ -64,7 +64,7 @@ export function InteractiveWall({
         return [...filtered, {
           id: createElementId(), type: 'reinforcement', wallId: w.id,
           x: w.x, y: w.y, w: w.w, h: w.h,
-          color: activeColor,
+          color: activeColor, ownerId: activeOwnerId || null,
           horizontal: w.horizontal !== undefined ? w.horizontal : false,
           floor: selectedFloor, mapId: selectedMap,
         }];
@@ -137,12 +137,6 @@ export function InteractiveWall({
       setElements(prev => prev.filter(el => el.id !== gadgetElement.id));
       return;
     }
-    if (gadgetElement.color !== activeColor) {
-      e.stopPropagation();
-      setElements(prev => recolorElements(prev, [gadgetElement.id], activeColor));
-      onSelectElement?.(gadgetElement.id, false);
-      return;
-    }
     if (pendingCanAttach && pendingGadget) {
       e.stopPropagation();
       setElements(prev => upsertAttachedGadget(prev, w, pendingGadget, activeColor, {
@@ -195,7 +189,7 @@ export function InteractiveWall({
                 style={{ pointerEvents: 'none' }}
               />
             )}
-            {/* Invisible click target — slightly larger than visual for usability */}
+            {/* Slightly larger invisible target for easier clicking. */}
             <rect
               x={`${w.x - Math.max(wallW, 0.8)/2}%`} y={`${w.y - Math.max(wallH, 0.8)/2}%`}
               width={`${Math.max(wallW, 0.8)}%`} height={`${Math.max(wallH, 0.8)}%`}
@@ -260,7 +254,7 @@ export function InteractiveWall({
         );
       })()}
 
-      {/* Door / Window — only render when something placed OR tool can interact */}
+      {/* Render doors and windows when occupied or interactive. */}
       {isOpening && (hasBarricade || gadgetOnOpening || canInteract) && (() => {
         // Use actual door dims; only apply a small minimum so tiny detections stay clickable
         const bw = doorW * 1.1;

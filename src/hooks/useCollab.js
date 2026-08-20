@@ -60,7 +60,7 @@ function randomUser() {
 }
 
 /**
- * useCollab — connects to a Yjs room and exposes shared maps + presence.
+ * useCollab connects to a Yjs room and exposes shared maps and presence.
  *
  * @param {string|null} roomId  active room id, or null/'' for solo (no connection)
  * @param {string|null} serverUrlOverride endpoint selected by hosting/joining
@@ -71,6 +71,8 @@ function randomUser() {
  *   peers: Array<{clientId,user,cursor,tool}>,
  *   yElements: Y.Map|null,   // element-id -> element JSON
  *   yLineups:  Y.Map|null,   // ctxKey -> players JSON
+ *   yTimeline: Y.Map|null,   // single timeline JSON value
+ *   yTasks: Y.Map|null,      // single task list JSON value
  *   yMeta:     Y.Map|null,   // name/side/floor/map/description/tags
  *   ydoc: Y.Doc|null,
  *   setPresence: (partial) => void,
@@ -89,7 +91,7 @@ export function useCollab(roomId, serverUrlOverride = null) {
   const [synced, setSynced]       = useState(false);
   const [peers, setPeers]         = useState([]);
   // y-websocket retries forever and stays silent about it. Without this the UI
-  // would sit on "connecting…" indefinitely when the endpoint is dead — e.g. an
+  // would sit on "connecting..." indefinitely when the endpoint is dead, for example an
   // expired Cloudflare Quick Tunnel whose hostname no longer resolves.
   const [unreachable, setUnreachable] = useState(false);
   const [, forceTick]             = useState(0);
@@ -122,7 +124,7 @@ export function useCollab(roomId, serverUrlOverride = null) {
       }, UNREACHABLE_AFTER_MS);
     };
 
-    // If anything below throws, React never receives the cleanup — the provider
+    // If anything below throws, React never receives the cleanup. The provider
     // would then reconnect forever with no way to stop it (an invisible zombie
     // socket until the page is reloaded). So teardown is callable at any point.
     const teardown = () => {
@@ -163,7 +165,7 @@ export function useCollab(roomId, serverUrlOverride = null) {
       };
       provider.on('status', onStatus);
 
-      // 'sync' fires once the initial room state has been received — only then is
+      // 'sync' fires once the initial room state has been received. Only then is
       // it safe to push local state, otherwise an empty joiner could wipe the doc.
       onSync = (isSynced) => setSynced(isSynced);
       provider.on('sync', onSync);
@@ -198,12 +200,10 @@ export function useCollab(roomId, serverUrlOverride = null) {
   // immediately; an empty name falls back to the generated one.
   const setUserName = useCallback((name) => {
     const value = normalizeCollabName(name);
-    setSelf(previous => {
-      const next = { ...previous, name: value || previous.name };
-      selfRef.current = next;
-      provRef.current?.awareness?.setLocalStateField('user', next);
-      return next;
-    });
+    const next = { ...selfRef.current, name: value || selfRef.current.name };
+    selfRef.current = next;
+    setSelf(next);
+    provRef.current?.awareness?.setLocalStateField('user', next);
     storeCollabName(value);
   }, []);
 
@@ -220,6 +220,8 @@ export function useCollab(roomId, serverUrlOverride = null) {
     ydoc,
     yElements: ydoc ? ydoc.getMap('elements') : null,
     yLineups:  ydoc ? ydoc.getMap('lineups')  : null,
+    yTimeline: ydoc ? ydoc.getMap('timeline') : null,
+    yTasks: ydoc ? ydoc.getMap('tasks') : null,
     yMeta:     ydoc ? ydoc.getMap('meta')     : null,
     setPresence,
   };

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -24,45 +24,20 @@ const MIME = {
 
 let mainWin = null;
 
-const SYNC_FILE = path.join(__dirname, '../drive-sync.json');
-
 function startServer() {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       const urlPath = req.url.split('?')[0];
 
-      // Drive sync endpoint — app POSTs strat data here, Claude reads the file.
-      // Same-origin only (served from 127.0.0.1:PORT), body capped + JSON-validated
-      // so the endpoint can't be abused to write arbitrary content to disk.
-      if (req.method === 'POST' && urlPath === '/api/sync-strats') {
-        const MAX_BODY = 20 * 1024 * 1024; // 20 MB
-        let body = '';
-        let aborted = false;
-        req.on('data', chunk => {
-          body += chunk;
-          if (body.length > MAX_BODY && !aborted) {
-            aborted = true;
-            res.writeHead(413); res.end(JSON.stringify({ error: 'payload too large' }));
-            req.destroy();
-          }
-        });
-        req.on('end', () => {
-          if (aborted) return;
-          try {
-            JSON.parse(body); // reject non-JSON payloads before touching disk
-            fs.writeFileSync(SYNC_FILE, body, 'utf8');
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true }));
-          } catch (e) {
-            res.writeHead(400); res.end(JSON.stringify({ error: 'invalid JSON' }));
-          }
-        });
-        return;
-      }
-
-      // Static file serving — normalise the path and confine it to BUILD_DIR so
+      // Static file serving. Normalize the path and confine it to BUILD_DIR so
       // a crafted request (e.g. /../../secret) can't escape the build folder.
-      const safePath = path.normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, '');
+      let safePath;
+      try {
+        safePath = path.normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, '');
+      } catch {
+        // Malformed percent-encoding (e.g. /%zz) is rejected instead of crashing.
+        res.writeHead(400); res.end('Bad Request'); return;
+      }
       let filePath = path.join(BUILD_DIR, safePath);
       if (!filePath.startsWith(BUILD_DIR) || !path.extname(filePath) || !fs.existsSync(filePath)) {
         filePath = path.join(BUILD_DIR, 'index.html');
@@ -74,28 +49,23 @@ function startServer() {
         res.end(data);
       });
     });
-    server.listen(PORT, '127.0.0.1', () => resolve());
+
+    server.on('error', reject);
+    server.listen(PORT, '127.0.0.1', () => resolve(server));
   });
 }
 
-// IPC: capture a region of the window and return PNG base64
-ipcMain.handle('capture-region', async (_event, rect) => {
-  if (!mainWin) return null;
-  try {
-    const image = await mainWin.webContents.capturePage(rect ? {
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width:  Math.round(rect.width),
-      height: Math.round(rect.height),
-    } : undefined);
-    return image.toPNG().toString('base64');
-  } catch (e) {
-    return null;
-  }
-});
-
 async function createWindow() {
-  await startServer();
+  try {
+    await startServer();
+  } catch (e) {
+    dialog.showErrorBox(
+      'Clav.Strats',
+      `Could not start the local server on port ${PORT} (is another copy running?)\n\n${e.message}`
+    );
+    app.quit();
+    return;
+  }
 
   mainWin = new BrowserWindow({
     width: 1440,
@@ -175,7 +145,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     await createWindow();
-    if (pendingRoom) {
+    if (pendingRoom && mainWin) {
       mainWin.webContents.once('did-finish-load', () => openRoom(pendingRoom));
     }
   });

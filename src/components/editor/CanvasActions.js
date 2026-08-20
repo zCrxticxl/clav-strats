@@ -3,7 +3,7 @@ import React from 'react';
 export function CanvasActions({
   selectedCount, canDetectWalls, detectingWalls, showGrid, zoom, exporting,
   onDeleteSelection, onDetectWalls, onToggleGrid, onResetView, onClear,
-  onExport, onOpenLineup,
+  onExport, onOpenLineup, exportReady, onOpenExportFolder, timelineOpen, onToggleTimeline, tasksOpen, onToggleTasks, calloutsOpen, onToggleCallouts,
 }) {
   return (
     <>
@@ -20,7 +20,11 @@ export function CanvasActions({
         style={{ opacity:exporting ? 0.5 : 1, borderColor:'rgba(232,184,75,0.4)', color:'var(--accent-gold)' }}>
         {exporting ? '⏳' : '📷'} PNG
       </button>
+      {exportReady && <button className="topbar-btn" onClick={onOpenExportFolder} title="Open the folder containing exported PNGs">📁 Show folder</button>}
       <button className="topbar-btn" onClick={onOpenLineup} title="Load a saved lineup">📋 Lineup</button>
+      <button className={`topbar-btn ${timelineOpen ? 'save' : ''}`} onClick={onToggleTimeline} title="Plan coordinated movement over time">⏱ Timeline</button>
+      <button className={`topbar-btn ${tasksOpen ? 'save' : ''}`} onClick={onToggleTasks} title="Assign strategy tasks">✓ Tasks</button>
+      <button className={`topbar-btn ${calloutsOpen ? 'save' : ''}`} onClick={onToggleCallouts} title="Place standard or custom map callouts">⌖ Callouts</button>
     </>
   );
 }

@@ -30,3 +30,12 @@ test('buildFloorSVG includes vertical holes on non-active floors', () => {
   expect(svg).toContain('rotate(90deg)');
   expect(svg).toContain('stroke="#E84B4B"');
 });
+
+test('reinforcement exports keep the player-neutral R label', () => {
+  const svg = buildFloorSVG(1000, 800, [{
+    type: 'reinforcement', x: 50, y: 40, color: '#4B9CE8', ownerName: 'Player Alpha',
+  }]);
+
+  expect(svg).toContain('>R</text>');
+  expect(svg).not.toContain('Player Alpha');
+});

@@ -102,7 +102,7 @@ export function CollabBar({
       }
       const code = createCollabInvite(room, inviteServerUrl || collab.serverUrl);
       await navigator.clipboard.writeText(code);
-      onToast?.('Invitation copied — your teammate only needs to paste this code');
+      onToast?.('Invitation copied. Your teammate only needs to paste this code.');
     } catch (error) {
       onToast?.(error?.message || 'Invitation could not be copied');
     }
@@ -124,7 +124,7 @@ export function CollabBar({
     ? 'The public tunnel stopped. A replacement is being started automatically.'
     : collab.unreachable
     ? `Cannot reach ${collab.serverUrl || 'the collaboration server'}. `
-      + 'Invitation codes expire when the host closes the app — ask for a fresh one, '
+      + 'Invitation codes expire when the host closes the app. Ask for a fresh one, '
       + 'or leave the session and start a new one.'
     : `Collaboration server: ${inviteServerUrl || collab.serverUrl || 'not connected'}`;
 
@@ -136,14 +136,14 @@ export function CollabBar({
         {statusLabel}
       </span>
 
-      {/* self + peer avatars — click your own to rename yourself */}
+              {/* Click your own avatar to rename yourself. */}
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {[{ clientId: 'self', user: collab.self }, ...collab.peers].map((p, i) => {
           const isSelf = p.clientId === 'self';
           return (
             <div key={p.clientId}
               onClick={isSelf ? renameSelf : undefined}
-              title={isSelf ? `${p.user.name} (you) — click to rename` : p.user.name}
+              title={isSelf ? `${p.user.name} (you). Click to rename.` : p.user.name}
               style={{
                 width: 22, height: 22, borderRadius: '50%', background: p.user.color,
                 color: '#0b0d11', display: 'flex', alignItems: 'center', justifyContent: 'center',

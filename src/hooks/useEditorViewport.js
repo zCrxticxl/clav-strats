@@ -1,14 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
- * useEditorViewport — manages zoom + pan state for the canvas container.
+ * useEditorViewport manages zoom and pan state for the canvas container.
  *
  * Returns:
- *   containerRef  — attach to the outer canvas div
- *   vpState       — { zoom, panX, panY } for rendering
- *   vpRef         — same values as a ref (always current, never stale in callbacks)
- *   startPan(e)   — call on middle-mouse-down to begin panning
- *   resetView()   — snap back to zoom=1, pan=0
+ *   containerRef: attach to the outer canvas div
+ *   vpState: { zoom, panX, panY } for rendering
+ *   vpRef: same values as a ref (always current in callbacks)
+ *   startPan(e): call on middle-mouse-down to begin panning
+ *   resetView(): snap back to zoom=1, pan=0
  */
 export function useEditorViewport() {
   const containerRef = useRef(null);

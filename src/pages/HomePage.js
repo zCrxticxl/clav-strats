@@ -1,29 +1,31 @@
 import React, { useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { COMPETITIVE_MAPS, RANKED_MAPS } from '../data/maps';
+import { SOCIAL_LINKS } from '../data/links';
 
-const SPACING  = 48;
-const INFLUENCE = 160;
-const STEP     = 5;
-const PULL     = 38;
+const SPACING  = 64;
+const INFLUENCE = 260;
+const STEP     = 10;
+const PULL     = 24;
 
 function distort(x, y, mx, my) {
   const dx = x - mx, dy = y - my;
   const dist = Math.sqrt(dx * dx + dy * dy);
   if (dist === 0 || dist > INFLUENCE) return [x, y];
   const t = 1 - dist / INFLUENCE;
-  const angle = Math.atan2(dy, dx);
-  const snapped = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
-  const pull = t * t * PULL * Math.cos((angle - snapped) * 2);
+  const pull = t * t * PULL;
   return [
-    x + Math.cos(snapped + Math.PI) * pull,
-    y + Math.sin(snapped + Math.PI) * pull,
+    x + (dx / dist) * pull,
+    y + (dy / dist) * pull,
   ];
 }
 
 function drawFrame(canvas, mx, my) {
   const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
+  const w = canvas.clientWidth || window.innerWidth;
+  const h = canvas.clientHeight || window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
   const active = mx > 0 && my > 0;
@@ -58,6 +60,7 @@ export default function HomePage() {
   const navigate  = useNavigate();
   const canvasRef = useRef(null);
   const mouseRef  = useRef({ x: -999, y: -999 });
+  const smoothMouseRef = useRef({ x: -999, y: -999 });
   const rafRef    = useRef(null);
 
   useEffect(() => {
@@ -65,25 +68,38 @@ export default function HomePage() {
     if (!canvas) return;
 
     const resize = () => {
-      canvas.width  = window.innerWidth;
-      canvas.height = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width  = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
     };
-    resize();
-    window.addEventListener('resize', resize);
-
+    const tick = () => {
+      rafRef.current = null;
+      const target = mouseRef.current;
+      const smooth = smoothMouseRef.current;
+      smooth.x += (target.x - smooth.x) * 0.14;
+      smooth.y += (target.y - smooth.y) * 0.14;
+      drawFrame(canvas, smooth.x, smooth.y);
+      if (Math.abs(target.x - smooth.x) > 0.35 || Math.abs(target.y - smooth.y) > 0.35) {
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    const schedule = () => {
+      if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
+    };
     const onMove = (e) => {
-      mouseRef.current = { x: e.clientX, y: e.clientY + window.scrollY };
+      mouseRef.current = { x: e.clientX, y: e.clientY };
+      schedule();
     };
+    const onResize = () => { resize(); drawFrame(canvas, smoothMouseRef.current.x, smoothMouseRef.current.y); };
+    resize();
+    drawFrame(canvas, smoothMouseRef.current.x, smoothMouseRef.current.y);
+    window.addEventListener('resize', onResize);
     window.addEventListener('mousemove', onMove, { passive: true });
 
-    const tick = () => {
-      drawFrame(canvas, mouseRef.current.x, mouseRef.current.y);
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-
     return () => {
-      window.removeEventListener('resize', resize);
+      window.removeEventListener('resize', onResize);
       window.removeEventListener('mousemove', onMove);
       cancelAnimationFrame(rafRef.current);
     };
@@ -112,13 +128,13 @@ export default function HomePage() {
             + New Strat
           </Link>
           <Link to="/library" className="btn-secondary">📂 Library</Link>
-          <a href="https://www.buymeacoffee.com/zCrxticxl" target="_blank" rel="noreferrer" className="btn-secondary btn-coffee" title="Support development">☕ Support</a>
+           <a href={SOCIAL_LINKS.buyMeACoffee} target="_blank" rel="noreferrer" className="btn-secondary btn-coffee" title="Support development">☕ Support</a>
         </div>
       </section>
 
       <section className="maps-section">
         <div className="section-header">
-          <h2 className="section-title">Quick Start — Competitive</h2>
+          <h2 className="section-title">Quick Start: Competitive</h2>
           <span className="section-label">PRO LEAGUE</span>
           <div className="section-divider" />
         </div>
@@ -163,7 +179,9 @@ export default function HomePage() {
       </section>
 
       <div style={{ textAlign: 'center', padding: '12px 0 32px', opacity: 0.3, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
-        <Link to="/wall-editor" style={{ color: 'inherit', textDecoration: 'none' }}>⚙ Wall Editor</Link>
+         <Link to="/wall-editor" style={{ color: 'inherit', textDecoration: 'none' }}>⚙ Wall Editor</Link>
+         <span style={{ margin: '0 8px' }}>·</span>
+         <a href={SOCIAL_LINKS.x} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none' }}>X @zCrxticxl</a>
       </div>
       </div>
     </div>

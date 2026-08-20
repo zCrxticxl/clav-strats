@@ -39,7 +39,7 @@ async function storeHandle(handle) {
 }
 
 function wallsToJS(walls) {
-  const lines = ['// Wall Data — manually placed via Wall Editor', 'export const MAP_WALLS = {'];
+  const lines = ['// Wall data, manually placed via Wall Editor.', 'export const MAP_WALLS = {'];
   for (const [mapId, floors] of Object.entries(walls)) {
     if (Object.keys(floors).length === 0) continue;
     lines.push(`  ${mapId}: {`);
@@ -265,7 +265,7 @@ export default function WallEditorPage() {
       return;
     }
     if (e.button !== 0) return;
-    // Don't add walls while reviewing suggestions — user must accept/discard first
+    // Do not add walls while reviewing suggestions. The user must accept or discard first.
     if (suggestions) return;
     const pt = toCanvas(e.clientX, e.clientY);
     addWall(pt.x, pt.y);
@@ -321,7 +321,7 @@ export default function WallEditorPage() {
   };
 
   const handleExport = () => {
-    const lines = ['// Wall Data — paste into src/data/walls.js'];
+    const lines = ['// Wall data. Paste into src/data/walls.js.'];
     lines.push('export const MAP_WALLS = {');
     for (const [mapId, floors] of Object.entries(walls)) {
       if (Object.keys(floors).length === 0) continue;
@@ -348,7 +348,7 @@ export default function WallEditorPage() {
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
     } catch {
-      showToast('Copy failed — please select and copy manually');
+      showToast('Copy failed. Please select and copy manually.');
     }
   };
 
@@ -370,14 +370,14 @@ export default function WallEditorPage() {
       const writable = await h.createWritable();
       await writable.write(wallsToJS(walls));
       await writable.close();
-      showToast('✓ Verbunden — speichert ab jetzt automatisch');
+      showToast('✓ Verbunden. Speichert ab jetzt automatisch.');
     } catch (err) {
       if (err.name !== 'AbortError') showToast('Fehler beim Verbinden');
     }
   };
 
   const handleWriteToFile = async () => {
-    const lines = ['// Wall Data — manually placed via Wall Editor'];
+    const lines = ['// Wall data, manually placed via Wall Editor.'];
     lines.push('export const MAP_WALLS = {');
     for (const [mapId, floors] of Object.entries(walls)) {
       if (Object.keys(floors).length === 0) continue;
@@ -449,7 +449,7 @@ export default function WallEditorPage() {
         <button className="topbar-btn" onClick={handleExport} style={{ borderColor: 'var(--accent-gold)', color: 'var(--accent-gold)' }}>📋 Export Code</button>
         <button className="topbar-btn" onClick={handleConnectFile}
           style={{ borderColor: fileHandle ? '#50E8A0' : '#888', color: fileHandle ? '#50E8A0' : '#aaa' }}
-          title={fileHandle ? 'Connected — click to reconnect' : 'Select walls.js once — auto-save after that'}>
+          title={fileHandle ? 'Connected. Click to reconnect.' : 'Select walls.js once. Auto-save runs after that.'}>
           {fileHandle ? '🟢 Auto-Save aktiv' : '🔗 walls.js verbinden'}
         </button>
       </div>
@@ -531,7 +531,7 @@ export default function WallEditorPage() {
 
         <div style={{ position: 'absolute', inset: 0, transform: `translate(${panX}px,${panY}px) scale(${zoom})`, transformOrigin: '0 0', width: '100%', height: '100%',
           display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {/* Aspect-locked inner box — image and SVG share exactly this area */}
+          {/* The image and SVG share this aspect-locked area. */}
           <div ref={innerRef} style={{
             position: 'relative',
             aspectRatio: imgAspect ? String(imgAspect) : '16 / 10',
@@ -546,7 +546,7 @@ export default function WallEditorPage() {
             )}
             <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}>
               {getCurrentWalls().map(w => <WallMarker key={w.id} w={w} onRemove={removeWall} onToggle={toggleWallOrientation} />)}
-              {/* Suggestions from auto-detector — translucent + clickable to dismiss */}
+          {/* Auto-detector suggestions are translucent and dismissible. */}
               {suggestions && [...suggestions.walls, ...suggestions.doors, ...suggestions.hatches].map(s => (
                 <SuggestionMarker key={s.id} w={s} onReject={rejectSuggestion} />
               ))}
@@ -588,7 +588,7 @@ export default function WallEditorPage() {
           </div>
         )}
 
-        {/* Detector parameters panel — only when not active */}
+          {/* Detector parameters are available when detection is inactive. */}
         {!suggestions && (
           <div style={{
             position: 'absolute', top: 12, right: 12, zIndex: 25,
@@ -634,7 +634,7 @@ export default function WallEditorPage() {
             onClick={e => e.stopPropagation()}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--accent-gold)' }}>📋 Export Wall Data</div>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>
-              Copy this code and save it as <code style={{ background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 3 }}>src/data/walls.js</code> — walls will then load automatically in the editor.
+              Copy this code and save it as <code style={{ background: 'var(--bg-surface)', padding: '2px 6px', borderRadius: 3 }}>src/data/walls.js</code>. The editor will load the walls automatically.
             </p>
             <textarea readOnly value={exportText}
               style={{ flex: 1, minHeight: 300, background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', color: '#50E8A0', fontFamily: 'monospace', fontSize: 12, padding: 12, borderRadius: 6, resize: 'vertical' }}
@@ -753,7 +753,7 @@ function SuggestionMarker({ w, onReject }) {
     ww = 3.5; wh = 3.5;
   }
 
-  // Draw EXACTLY at detected dimensions — no padding, no border (border was
+  // Draw at the detected dimensions with no padding or border. The border was
   // making markers visually larger than the underlying yellow wall).
   const px = w.x - ww / 2;
   const py = w.y - wh / 2;

@@ -2,6 +2,23 @@ import { useState, useEffect } from 'react';
 import { ATTACKERS, DEFENDERS } from '../../data/operators';
 import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES } from '../../data/gadgets';
 import { MiniOpIcon, StripOpIcon } from './OpIcons';
+import { normalizeLineup } from '../../utils/playerOwnership';
+
+function preloadLineupAssets(side) {
+  const operators = side === 'attack' ? ATTACKERS : DEFENDERS;
+  const urls = new Set();
+  operators.forEach(operator => {
+    if (operator.icon) urls.add(operator.icon);
+    if (operator.gadget?.icon) urls.add(operator.gadget.icon);
+    (operator.secondaries || []).forEach(gadget => gadget?.icon && urls.add(gadget.icon));
+  });
+  return [...urls].map(src => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = src;
+    return image;
+  });
+}
 
 // ── LineupPanel (collapsed sidebar section) ───────────────────────────────────
 export function LineupPanel({ side, lineup, onChange }) {
@@ -87,7 +104,7 @@ export function LineupPanel({ side, lineup, onChange }) {
           <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-mid)', borderRadius: 12, padding: 20, width: 440, maxHeight: '65vh', overflow: 'auto' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 16, fontWeight: 700, marginBottom: 12, color: lineup[pickingFor]?.color }}>
-              Operator — {side === 'attack' ? '⚔ ATK' : '🛡 DEF'}
+              Operator: {side === 'attack' ? '⚔ ATK' : '🛡 DEF'}
             </div>
             <input className="op-search" style={{ width: '100%', marginBottom: 10 }} autoFocus
               placeholder="Search..." value={opSearch} onChange={e => setOpSearch(e.target.value)} />
@@ -110,8 +127,8 @@ export function LineupPanel({ side, lineup, onChange }) {
   );
 }
 
-// ── GadgetSlot — must be defined outside LineupStrip to avoid remount-on-render ─
-function GadgetSlot({ gadget, color, isSig, placed, onDragStart, onDragEnd }) {
+// Keep GadgetSlot outside LineupStrip so it does not remount on every render.
+function GadgetSlot({ gadget, color, isSig, placed, onDragStart, onDragEnd, onPointerStart }) {
   if (!gadget) return null;
   const total     = gadget.count ?? 99;
   const remaining = total - placed;
@@ -119,11 +136,12 @@ function GadgetSlot({ gadget, color, isSig, placed, onDragStart, onDragEnd }) {
   return (
     <div style={{ position: 'relative', display: 'inline-flex' }}>
       <div className="lineup-strip-gadget"
-        draggable={!depleted}
+         draggable={!depleted && !onPointerStart}
         title={`${gadget.label}${total < 99 ? ` · ${remaining}/${total} left` : ''}`}
-        style={{ cursor: depleted ? 'not-allowed' : 'grab', borderColor: depleted ? '#E84B4B88' : isSig ? color + '88' : 'var(--border-subtle)', opacity: depleted ? 0.45 : 1 }}
-        onDragStart={depleted ? e => e.preventDefault() : onDragStart}
-        onDragEnd={onDragEnd}>
+         style={{ cursor: depleted ? 'not-allowed' : 'grab', touchAction: 'none', borderColor: depleted ? '#E84B4B88' : isSig ? color + '88' : 'var(--border-subtle)', opacity: depleted ? 0.45 : 1 }}
+         onDragStart={depleted ? e => e.preventDefault() : onDragStart}
+         onPointerDown={depleted ? e => e.preventDefault() : e => onPointerStart?.(e, gadget, color)}
+         onDragEnd={onDragEnd}>
         <img src={gadget.icon} alt={gadget.label} />
       </div>
       {total < 99 && (
@@ -142,43 +160,49 @@ function GadgetSlot({ gadget, color, isSig, placed, onDragStart, onDragEnd }) {
 }
 
 // ── LineupStrip (bottom bar of canvas) ───────────────────────────────────────
-export function LineupStrip({ lineup, side, onEdit, onDragGadget, gadgetCounts = {}, onSelectPlayer, selectedPlayerIdx }) {
+export function LineupStrip({ lineup, side, onEdit, onDragGadget, onPointerDragGadget, gadgetCounts = {}, reinforcementCounts = {}, onSelectPlayer, selectedPlayerIdx, expanded = true, onToggleExpanded }) {
   const stop = e => e.stopPropagation();
-  const dragGadget = (e, gadget, color) => {
+  const dragGadget = (e, gadget, color, ownerId) => {
     e.stopPropagation();
     e.dataTransfer.effectAllowed = 'copy';
-    e.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget, color }));
-    if (onDragGadget) onDragGadget(gadget, color);
+    e.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget, color, ownerId }));
+    if (onDragGadget) onDragGadget(gadget, color, ownerId);
   };
   const dragOp = (e, op, color, sideArg) => {
     e.stopPropagation();
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('application/x-clav-operator', JSON.stringify({ op, color, side: sideArg }));
-    if (onDragGadget) onDragGadget({ __op: op }, color);
+    if (onDragGadget) onDragGadget({ __op: op }, color, null);
   };
   const onDragEnd = () => onDragGadget && onDragGadget(null, null);
+  const players = normalizeLineup(lineup);
+  useEffect(() => {
+    // Warm the browser cache before the player editor is opened. The modal
+    // contains the complete operator/utility palette, not just the active five.
+    preloadLineupAssets(side);
+  }, [side]);
 
   return (
-    <div className="lineup-strip"
+    <div className={`lineup-strip ${expanded ? 'expanded' : 'compact'}`}
       onMouseDown={stop} onMouseUp={stop} onMouseMove={stop} onClick={stop}
       onDrop={e => { e.preventDefault(); e.stopPropagation(); }}
       onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}>
-      {lineup.map((player, idx) => {
+      {onToggleExpanded && <button type="button" className="lineup-strip-mode" onClick={event => { event.stopPropagation(); onToggleExpanded(); }} title={expanded ? 'Compact lineup' : 'Show lineup details'}>{expanded ? 'Compact' : 'Details'}</button>}
+      {players.map((player, idx) => {
         const empty = !player.operator;
         const isSelected = selectedPlayerIdx === idx;
         return (
           <div key={idx}
             data-lineup-idx={idx}
             className={`lineup-strip-card${empty ? ' empty' : ''}${isSelected ? ' selected-player' : ''}`}
-            onClick={() => { onSelectPlayer && onSelectPlayer(idx, player.color); }}
-            onDoubleClick={() => onEdit(idx)}
+             onClick={() => { onSelectPlayer && onSelectPlayer(idx, player.color); }}
             style={{
               borderColor: isSelected ? player.color : empty ? 'var(--border-subtle)' : player.color + '55',
               borderStyle: empty ? 'dashed' : 'solid',
               boxShadow: isSelected ? `0 0 10px ${player.color}66` : 'none',
               background: isSelected ? player.color + '18' : undefined,
             }}
-            title={empty ? 'Click to choose' : 'Click: edit · Drag icons to map'}>
+             title={empty ? 'Click to select · Edit to choose' : 'Click to select · Edit to configure'}>
             <div className="lineup-strip-op"
               draggable={!empty}
               onDragStart={!empty ? e => dragOp(e, player.operator, player.color, side) : undefined}
@@ -188,13 +212,16 @@ export function LineupStrip({ lineup, side, onEdit, onDragGadget, gadgetCounts =
                 ? <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 700, color: player.color }}>{idx + 1}</span>
                 : <StripOpIcon op={player.operator} color={player.color} />}
             </div>
-            <div className="lineup-strip-info">
-              <div className="lineup-strip-name" style={{ color: empty ? 'var(--text-muted)' : 'var(--text-primary)' }}>
-                {player.operator ? player.operator.name : `Player ${idx + 1}`}
-              </div>
-              <div className="lineup-strip-role">
-                {player.operator ? player.operator.role : 'Click to choose'}
-              </div>
+             <div className="lineup-strip-info">
+               <div className="lineup-strip-name" style={{ color: empty ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+                 <span>{player.name || `Player ${idx + 1}`}</span>
+                 <span className="lineup-strip-walls" style={{ color: player.color }} title={`${reinforcementCounts[player.slotId] || 0} walls assigned`}>
+                   W {reinforcementCounts[player.slotId] || 0}
+                 </span>
+               </div>
+               <div className="lineup-strip-role">
+                 {player.operator ? `${player.operator.name} · ${player.operator.role}` : 'Click to choose'}
+               </div>
               {player.backups?.length > 0 && (
                 <div style={{ display: 'flex', gap: 2, marginTop: 2 }}
                   title={`Backups: ${player.backups.map(b => b.name).join(', ')}`}>
@@ -205,16 +232,17 @@ export function LineupStrip({ lineup, side, onEdit, onDragGadget, gadgetCounts =
                 </div>
               )}
             </div>
-            {!empty && (
-              <div className="lineup-strip-gadgets" onClick={e => e.stopPropagation()}>
+             {!empty && (
+               <div className="lineup-strip-gadgets" onClick={e => e.stopPropagation()}>
                 {player.operator?.gadget && (
                   <GadgetSlot
                     gadget={player.operator.gadget}
                     color={player.color}
                     isSig
-                    placed={gadgetCounts[`${player.color}:${player.operator.gadget.id}`] || 0}
-                    onDragStart={e => dragGadget(e, player.operator.gadget, player.color)}
-                    onDragEnd={onDragEnd}
+                     placed={gadgetCounts[`${player.slotId}:${player.operator.gadget.id}`] || gadgetCounts[`${player.color}:${player.operator.gadget.id}`] || 0}
+                     onDragStart={e => dragGadget(e, player.operator.gadget, player.color, player.slotId)}
+                     onPointerStart={onPointerDragGadget ? (e, gadget, color) => onPointerDragGadget(e, gadget, color, player.slotId) : undefined}
+                     onDragEnd={onDragEnd}
                   />
                 )}
                 {player.secondaryGadget && (
@@ -222,14 +250,24 @@ export function LineupStrip({ lineup, side, onEdit, onDragGadget, gadgetCounts =
                     gadget={player.secondaryGadget}
                     color={player.color}
                     isSig={false}
-                    placed={gadgetCounts[`${player.color}:${player.secondaryGadget.id}`] || 0}
-                    onDragStart={e => dragGadget(e, player.secondaryGadget, player.color)}
-                    onDragEnd={onDragEnd}
+                     placed={gadgetCounts[`${player.slotId}:${player.secondaryGadget.id}`] || gadgetCounts[`${player.color}:${player.secondaryGadget.id}`] || 0}
+                     onDragStart={e => dragGadget(e, player.secondaryGadget, player.color, player.slotId)}
+                     onPointerStart={onPointerDragGadget ? (e, gadget, color) => onPointerDragGadget(e, gadget, color, player.slotId) : undefined}
+                     onDragEnd={onDragEnd}
                   />
                 )}
-              </div>
-            )}
-          </div>
+               </div>
+             )}
+             <button
+               type="button"
+               className="lineup-strip-edit"
+               aria-label={`Edit ${player.name || `Player ${idx + 1}`}`}
+               title="Edit player"
+               onClick={event => { event.stopPropagation(); onEdit(idx); }}
+             >
+               Edit
+             </button>
+           </div>
         );
       })}
     </div>

@@ -2,16 +2,17 @@ import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useStrats } from '../hooks/useStrats';
 import { ALL_MAPS } from '../data/maps';
+import { CURRENT_BACKUP_VERSION, parseBackupPayload } from '../utils/stratSchema';
 
 const getMap = (mapId) => ALL_MAPS.find(m => m.id === mapId);
 
 export default function LibraryPage() {
-  const { strats, deleteStrat, saveStrat, importStrats } = useStrats();
+  const { strats, folders, deleteStrat, saveStrat, createFolder, moveStratToFolder, importFolders, importStrats } = useStrats();
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
   const handleExport = () => {
-    const payload = { app: 'clav-strats', version: 1, exportedAt: new Date().toISOString(), strats };
+    const payload = { app: 'clav-strats', version: CURRENT_BACKUP_VERSION, exportedAt: new Date().toISOString(), folders, strats };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -28,9 +29,10 @@ export default function LibraryPage() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(reader.result);
-        const list = Array.isArray(parsed) ? parsed : parsed.strats;
-        const stats = importStrats(list);
+         const parsed = JSON.parse(reader.result);
+         const list = parseBackupPayload(parsed);
+         const stats = importStrats(list);
+         if (!Array.isArray(parsed)) importFolders(parsed.folders);
         window.alert(`Import: ${stats.added} added, ${stats.updated} updated, ${stats.skipped} skipped.`);
       } catch (err) {
         window.alert(`Import failed: ${err.message}`);
@@ -40,6 +42,7 @@ export default function LibraryPage() {
   };
   const [filterMap,  setFilterMap]  = useState('all');
   const [filterSide, setFilterSide] = useState('all');
+  const [filterFolder, setFilterFolder] = useState('all');
   const [search,     setSearch]     = useState('');
   const [sortBy,     setSortBy]     = useState('newest');
 
@@ -47,6 +50,7 @@ export default function LibraryPage() {
     .filter(s => {
       if (filterMap  !== 'all' && s.mapId !== filterMap)  return false;
       if (filterSide !== 'all' && s.side  !== filterSide) return false;
+      if (filterFolder !== 'all' && s.folderId !== filterFolder) return false;
       if (search && !s.name?.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     })
@@ -95,6 +99,7 @@ export default function LibraryPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button className="filter-btn" onClick={handleExport} disabled={strats.length === 0} title="Save all strats as a JSON backup">⬇ Export</button>
           <button className="filter-btn" onClick={() => fileInputRef.current?.click()} title="Import strats from a JSON backup">⬆ Import</button>
+          <button className="filter-btn" onClick={() => { const name = window.prompt('Folder name:'); if (name) createFolder(name); }} title="Create a playbook folder">+ Folder</button>
           <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleImport} style={{ display: 'none' }} />
           <Link to="/editor" className="btn-primary">+ New Strat</Link>
         </div>
@@ -148,6 +153,12 @@ export default function LibraryPage() {
         ))}
       </div>
 
+      <div className="library-filters">
+        <span className="filter-label">PLAYBOOK:</span>
+        <button className={`filter-btn ${filterFolder === 'all' ? 'active' : ''}`} onClick={() => setFilterFolder('all')}>All</button>
+        {folders.map(folder => <button key={folder.id} className={`filter-btn ${filterFolder === folder.id ? 'active' : ''}`} onClick={() => setFilterFolder(folder.id)}>{folder.name}</button>)}
+      </div>
+
       {/* Grid */}
       {filtered.length === 0 ? (
         <div className="empty-state">
@@ -171,7 +182,7 @@ export default function LibraryPage() {
                 }}>
                   {map?.preview && <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(0,0,0,0.2), rgba(0,0,0,0.65))' }} />}
                   <span className="strat-card-preview-label" style={{ position: 'relative' }}>
-                    {map?.name || 'No map'} · {strat.floor || '—'}
+                    {map?.name || 'No map'} · {strat.floor || '-'}
                   </span>
                   <span style={{
                     position: 'absolute', top: 8, right: 8,
@@ -195,14 +206,18 @@ export default function LibraryPage() {
                       ))}
                     </div>
                   )}
-                  <div className="strat-card-meta">
+                 <div className="strat-card-meta">
                     {(strat.tags || []).map(tag => (
                       <span key={tag} className="strat-tag">{tag}</span>
                     ))}
                     <span className="strat-tag" style={{ marginLeft: 'auto', opacity: 0.6 }}>
                       {new Date(strat.updatedAt).toLocaleDateString('en-US')}
                     </span>
-                  </div>
+                   </div>
+                  <select value={strat.folderId || ''} onClick={event => event.stopPropagation()} onChange={event => moveStratToFolder(strat.id, event.target.value)} className="strat-folder-select" aria-label={`Playbook folder for ${strat.name}`}>
+                    <option value="">No folder</option>
+                    {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                  </select>
                 </div>
 
                 <div className="strat-card-actions">

@@ -29,7 +29,7 @@ test('renders an empty interactive wall without a runtime error', () => {
   act(() => root.unmount());
 });
 
-test('clicking the offset gadget recolors only that gadget', () => {
+test('clicking the offset gadget keeps its owner color', () => {
   let elements = [
     { id:'reinforcement-1', type:'reinforcement', wallId:wall.id, color:'#E8B84B' },
     {
@@ -51,7 +51,7 @@ test('clicking the offset gadget recolors only that gadget', () => {
   act(() => container.querySelector('[data-gadget-hitbox="true"]')
     .dispatchEvent(new MouseEvent('click', { bubbles:true })));
 
-  expect(elements.find(element => element.id === 'gadget-1').color).toBe('#4B9CE8');
+   expect(elements.find(element => element.id === 'gadget-1').color).toBe('#E8B84B');
   expect(elements.find(element => element.id === 'reinforcement-1').color).toBe('#E8B84B');
   act(() => root.unmount());
 });

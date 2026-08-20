@@ -23,7 +23,7 @@ export function useTauriUpdater() {
         const { relaunch } = await import('@tauri-apps/plugin-process');
         await relaunch();
       } catch (e) {
-        // Network down, no release yet, etc. — fail silently.
+        // Network down or no release yet. Fail silently.
         console.error('[updater]', e);
       }
     })();

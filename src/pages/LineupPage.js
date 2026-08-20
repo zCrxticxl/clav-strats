@@ -18,11 +18,11 @@ function saveLineupsToStorage(data) {
 // Context key: mapId:side
 const ctxKey = (mapId, side) => `${mapId || 'any'}:${side}`;
 
-const EMPTY_PLAYER = (color) => ({
-  name: '', color, operator: null, role: '', secondaryGadget: null,
+const EMPTY_PLAYER = (color, index) => ({
+  name: '', color, slotId: `player-slot-${index + 1}`, operator: null, role: '', secondaryGadget: null,
 });
 
-const DEFAULT_PLAYERS = () => PLAYER_COLORS.map(c => EMPTY_PLAYER(c));
+const DEFAULT_PLAYERS = () => PLAYER_COLORS.map((c, index) => EMPTY_PLAYER(c, index));
 
 function newLineup(name = 'Lineup') {
   return { id: `lu-${Date.now()}-${Math.random().toString(36).slice(2)}`, name, players: DEFAULT_PLAYERS(), createdAt: new Date().toISOString() };
@@ -268,7 +268,7 @@ export default function LineupPage() {
           <div style={{ background: 'var(--bg-panel)', border: `1px solid ${activeLineup.players[pickingFor]?.color}88`, borderRadius: 12, padding: 20, width: 460, maxHeight: '72vh', display: 'flex', flexDirection: 'column' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 14, color: activeLineup.players[pickingFor]?.color }}>
-              {side === 'attack' ? '⚔ ATK' : '🛡 DEF'} — Choose operator
+              {side === 'attack' ? '⚔ ATK' : '🛡 DEF'}: Choose operator
             </div>
             <input
               className="op-search" autoFocus

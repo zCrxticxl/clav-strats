@@ -5,7 +5,7 @@
 
 async function loadImageToCanvas(src, maxSide) {
   const img = new Image();
-  // NOTE: do NOT set crossOrigin for same-origin images. CRA's dev server does
+  // NOTE: do NOT set crossOrigin for same-origin images. The dev server does
   // not return CORS headers, and an "anonymous" request to a server that
   // doesn't ack CORS will fail the image load entirely. Same-origin images
   // don't taint the canvas anyway.
@@ -280,7 +280,7 @@ export async function detectReinforcementMarkers(src, opts = {}) {
   return dedupe(markers, cfg.dedupePct);
 }
 
-// Walls only — each yellow blob becomes one clickable marker.
+// Walls only. Each yellow blob becomes one clickable marker.
 // Door/hatch detection is opt-in via opts.doors=true / opts.hatches=true
 // because automatic detection of those produces too many false positives.
 //
@@ -302,7 +302,7 @@ export async function detectWalls(src, opts = {}) {
     horizontal: s.horizontal,
   });
 
-  // 1:1 — every yellow segment that passes the wall filter becomes a marker.
+// 1:1. Every yellow segment that passes the wall filter becomes a marker.
   // No merging, no door/hatch heuristics.
   const walls = dedupe(segments.map(wallMk), cfg.dedupePct);
 
@@ -330,7 +330,7 @@ export async function detectWalls(src, opts = {}) {
     doors = dedupe(doorRaw.map(doorMk), cfg.dedupePct);
   }
 
-  // Hatches: same — opt-in only, since dashed-square detection is noisy.
+// Hatches use the same logic, but remain opt-in because dashed-square detection is noisy.
   let hatches = [];
   if (opts.hatches) {
     const hatchRaw = findHatches(allSegments, cfg);

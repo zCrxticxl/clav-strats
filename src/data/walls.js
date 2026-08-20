@@ -1,4 +1,4 @@
-// Wall Data — manually placed via Wall Editor
+// Wall data, manually placed via Wall Editor.
 export const MAP_WALLS = {
   bank: {
     'Basement': [

@@ -1,8 +1,8 @@
 # Clav.Strats as a Tauri app
 
 Tauri wraps the existing React build in a tiny native window using the OS webview
-(WebView2 on Windows) instead of bundling Chromium. Result: ~5–10 MB installer
-instead of ~150 MB, and a built-in auto-updater. The React frontend is unchanged —
+(WebView2 on Windows) instead of bundling Chromium. Result: ~5-10 MB installer
+instead of ~150 MB, and a built-in auto-updater. The React frontend is unchanged.
 Electron and Tauri coexist in this repo.
 
 ## What was added
@@ -37,7 +37,7 @@ npm install          # pulls @tauri-apps/cli
 
 ## 2. Generate icons (required before the first build)
 
-Tauri needs a set of icons. Point it at any square PNG (≥ 512×512) — your logo:
+Tauri needs a set of icons. Point it at any square PNG (≥ 512×512), such as your logo:
 
 ```bash
 npm run tauri icon path\to\logo.png
@@ -51,9 +51,8 @@ This fills `src-tauri/icons/` with every size the bundler expects.
 npm run tauri dev
 ```
 
-Starts the CRA dev server (`npm start`) and opens the native window pointing at it,
-with hot reload. Tip: set `BROWSER=none` in a `.env` so CRA doesn't also open a
-browser tab.
+Starts the Vite dev server (`npm start`) and opens the native window pointing at it,
+with hot reload. Vite does not open a browser tab automatically.
 
 ## 4. Build the installer
 
@@ -62,19 +61,19 @@ npm run tauri build
 ```
 
 Output: `src-tauri/target/release/bundle/nsis/Clav.Strats_1.0.0_x64-setup.exe`
-(a proper installer that registers the app, ~5–10 MB).
+(an installer that registers the app, about 5-10 MB).
 
 This fixes the missing-images problem from the Electron portable build: Tauri
-serves `build/` (blueprints, icons) natively — no custom localhost HTTP server.
+serves `build/` (blueprints, icons) natively. No custom localhost HTTP server is needed.
 
 ---
 
-## Auto-updater (already wired) — GitHub Releases flow
+## Auto-updater (already wired): GitHub Releases flow
 
 The updater is **already set up in code**: plugin registered in `lib.rs`, config in
 `tauri.conf.json` (`plugins.updater` + `bundle.createUpdaterArtifacts`), permissions
 in `capabilities/default.json`, and a startup check in `src/hooks/useTauriUpdater.js`
-(prompts "Update x.y available — install now?" and relaunches). Installed apps poll
+(prompts "Update x.y available. Install now?" and relaunches). Installed apps poll
 GitHub, verify the download against your public key, and self-update on one click.
 
 You only have to do the setup below **once**, then repeat the release step per update.
@@ -88,10 +87,12 @@ You only have to do the setup below **once**, then repeat the release step per u
    Copy the printed **public key**.
 
 2. **Paste the public key** into `src-tauri/tauri.conf.json` →
-   `plugins.updater.pubkey` (replace `PASTE_YOUR_TAURI_PUBLIC_KEY_HERE`).
+   `plugins.updater.pubkey`. (This is already configured: the repo's key and the
+   GitHub `zCrxticxl/clav-strats` endpoint are set. Only repeat this if you rotate
+   the signing key.)
 
-3. **Set your GitHub repo** in the same file's `endpoints`. Create a **public**
-   repo (releases must be publicly downloadable) — it can just hold releases:
+3. **Set your GitHub repo** in the same file's `endpoints`. It must be a **public**
+   repo (releases must be publicly downloadable):
    ```
    https://github.com/YOUR_GH_USER/clav-strats/releases/latest/download/latest.json
    ```
@@ -129,11 +130,11 @@ You only have to do the setup below **once**, then repeat the release step per u
 4. On GitHub: **Releases → Draft new release**, tag `v1.0.1`, and upload
    **both** the `-setup.exe` and `latest.json` as assets. Publish.
 
-Done — every installed app checks on next launch and offers the update.
+Done. Every installed app checks on next launch and offers the update.
 
 ### Fully automated (optional)
 
-The `tauri-apps/tauri-action` GitHub Action does steps 2–4 for you (build, sign,
+The `tauri-apps/tauri-action` GitHub Action does steps 2-4 for you (build, sign,
 create the release, generate `latest.json`) on every tag push. Ask and I'll add the
 workflow file + the secrets you need (`TAURI_SIGNING_PRIVATE_KEY`, its password).
 
@@ -156,4 +157,4 @@ https://v2.tauri.app/plugin/deep-linking/.
 
 When the Tauri build works end to end, you can delete `public/electron.js`,
 `public/preload.js`, the `electron`/`electron-builder` devDeps, and the `electron`
-/ `dist` scripts. Until then both stay — nothing is broken.
+/ `dist` scripts. Until then both stay; nothing is broken.

@@ -11,7 +11,7 @@ import { ATTACKERS, DEFENDERS } from '../data/operators';
 import { PLAYER_COLORS, EXTENDED_COLORS, ALL_GADGETS, ROLES, GADGETS } from '../data/gadgets';
 
 import { MAP_WALLS } from '../data/walls';
-import { exportStratAsPNG } from '../utils/exportPng';
+import { exportStratAsPNG, renderStratAsPNG, exportTimelineAsWebM, exportTimelineAsGIF } from '../utils/exportPng';
 import { createElementId } from '../utils/elementId';
 import { detectWalls } from '../utils/wallDetector';
 import { OpImg } from '../components/editor/OpIcons';
@@ -40,6 +40,17 @@ import { StylePalette } from '../components/editor/StylePalette';
 import { OperatorPalette } from '../components/editor/OperatorPalette';
 import { CanvasTextInput } from '../components/editor/CanvasTextInput';
 import { parseCollabInvite } from '../utils/collabInvite';
+import { normalizeTimeline, getPlaybackPositions } from '../utils/timeline';
+import { useTimelinePlayback } from '../hooks/useTimelinePlayback';
+import { TimelinePanel } from '../components/editor/TimelinePanel';
+import { TaskPanel } from '../components/editor/TaskPanel';
+import { CalloutPanel } from '../components/editor/CalloutPanel';
+import { UtilityPanel } from '../components/editor/UtilityPanel';
+import { normalizeTasks } from '../utils/tasks';
+import {
+  getOwnerIdForColor, migrateOwnedElements, normalizeLineup,
+  normalizeLineupsByContext, playerSlotId,
+} from '../utils/playerOwnership';
 
 const WALL_STORAGE_KEY = 'clav-walls-v2';
 
@@ -67,7 +78,7 @@ const TOOL_SHORTCUTS = DRAW_TOOLS.reduce((acc, t) => {
 
 
 const DEFAULT_LINEUP = PLAYER_COLORS.map((c, i) => ({
-  name: `Player ${i + 1}`, color: c, operator: null, role: '', gadget: null, secondaryGadget: null, backups: [],
+  name: `Player ${i + 1}`, color: c, slotId: playerSlotId(i), operator: null, role: '', gadget: null, secondaryGadget: null, backups: [],
 }));
 
 function makeDragGhost(iconSrc, color) {
@@ -93,7 +104,7 @@ function findNearestWall(pt, walls, maxDist) {
 }
 
 // ── Export Modal ──────────────────────────────────────────────────────────────
-function ExportModal({ floors, selectedFloor, onClose, onExport }) {
+function ExportModal({ floors, selectedFloor, onClose, onExport, onPreview }) {
   const [withLineup, setWithLineup] = React.useState(true);
   const [withMeta,   setWithMeta]   = React.useState(true);
   const [selFloors,  setSelFloors]  = React.useState([selectedFloor].filter(Boolean));
@@ -154,11 +165,36 @@ function ExportModal({ floors, selectedFloor, onClose, onExport }) {
           className="topbar-btn save"
           disabled={selFloors.length === 0}
           style={{ width:'100%', padding:'11px', fontSize:13, opacity: selFloors.length === 0 ? 0.4 : 1 }}
-          onClick={() => onExport({ floors: selFloors, withLineup, withMeta })}>
-          📷 {selFloors.length > 1 ? `${selFloors.length} PNGs export` : 'Export PNG'}
+           onClick={() => onExport({ floors: selFloors, withLineup, withMeta })}>
+           📷 {selFloors.length > 1 ? `${selFloors.length} PNGs export` : 'Export PNG'}
+        </button>
+        <button
+          className="topbar-btn"
+          disabled={selFloors.length === 0}
+          style={{ width:'100%', marginTop:8 }}
+          onClick={() => onPreview({ floors: selFloors, withLineup, withMeta })}>
+          ◉ Preview
         </button>
         <button style={{ marginTop:10, width:'100%', background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:12 }}
           onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ExportPreviewModal({ src, floor, floors = [], options, onClose, onFloor }) {
+  const floorIndex = floors.indexOf(floor);
+  return (
+    <div className="export-preview-backdrop" onClick={onClose}>
+      <div className="export-preview-dialog" onClick={event => event.stopPropagation()}>
+        <div className="export-preview-header">
+          <div><span className="export-preview-kicker">FINAL PNG PREVIEW</span><strong>{floor}</strong><div className="export-preview-options"><span className={options?.withLineup ? 'active' : ''}>Lineup</span><span className={options?.withMeta ? 'active' : ''}>Info</span></div></div>
+          <button className="export-preview-close" onClick={onClose} aria-label="Close preview">×</button>
+        </div>
+        <div className="export-preview-frame">
+          {src ? <img src={src} alt={`PNG export preview for ${floor}`} /> : <span>Rendering preview...</span>}
+        </div>
+        {floors.length > 1 && <div className="export-preview-nav"><button className="topbar-btn" disabled={floorIndex <= 0} onClick={() => onFloor(floors[floorIndex - 1])}>← Previous</button><span>{floorIndex + 1} / {floors.length}</span><button className="topbar-btn" disabled={floorIndex >= floors.length - 1} onClick={() => onFloor(floors[floorIndex + 1])}>Next →</button></div>}
       </div>
     </div>
   );
@@ -182,7 +218,7 @@ export default function EditorPage() {
   const [currentPath, setCurrentPath] = useState(null);
   const [marquee, setMarquee]         = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [routeDraft, setRouteDraft]   = useState(null); // { points:[], color, width } — click-to-add waypoints
+  const [routeDraft, setRouteDraft]   = useState(null); // { points:[], color, width }. Click to add waypoints.
   const [routeCursor, setRouteCursor] = useState(null); // live preview point to cursor
   const routeDraftRef = useRef(null);
   const drawStartRef = useRef(null);
@@ -192,13 +228,25 @@ export default function EditorPage() {
   const [stratName, setStratName]         = useState('Untitled Strat');
   const [selectedMap, setSelectedMap]     = useState(sp.get('map') || '');
   const [selectedFloor, setSelectedFloor] = useState('');
-  const [side, setSide]                   = useState(spSide || 'attack');
+  const [side, setSide]                   = useState(spSide || 'defend');
   const [description, setDescription]     = useState('');
   const [tags, setTags]                   = useState([]);
   const [tagInput, setTagInput]           = useState('');
   const [editorState, setEditorState, history] = useEditorHistory({ elements: [], lineupsByContext: {} });
   const elements          = editorState.elements;
   const lineupsByContext  = editorState.lineupsByContext;
+  const [timeline, setTimeline] = useState(normalizeTimeline());
+  const [tasks, setTasks] = useState([]);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [calloutsOpen, setCalloutsOpen] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState('details');
+  const [lineupExpanded, setLineupExpanded] = useState(true);
+  const [pendingCallout, setPendingCallout] = useState(null);
+  const [timelineMode, setTimelineMode] = useState(false);
+  const [timelinePointPick, setTimelinePointPick] = useState(null);
+  const [timelinePickedPoint, setTimelinePickedPoint] = useState(null);
+  const timelinePlayback = useTimelinePlayback(timeline);
 
   const setElements = useCallback((updater, opts) => {
     setEditorState(prev => ({ ...prev, elements: typeof updater === 'function' ? updater(prev.elements) : updater }), opts);
@@ -232,23 +280,43 @@ export default function EditorPage() {
   }, []);
   const applyingRemoteRef = useRef(false); // guards elements/lineups remote apply
   const metaApplyingRef   = useRef(false); // guards meta remote apply
+  const timelineApplyingRef = useRef(false);
+  const tasksApplyingRef = useRef(false);
   const canPushRef        = useRef(false); // only push local->remote after initial sync
   const cursorThrottleRef = useRef(0);
 
   const lineupCtxKey = `${selectedMap || 'none'}:${side}`;
-  const lineup       = lineupsByContext[lineupCtxKey] || DEFAULT_LINEUP;
+  const lineup       = useMemo(() => normalizeLineup(lineupsByContext[lineupCtxKey] || DEFAULT_LINEUP), [lineupsByContext, lineupCtxKey]);
+  useEffect(() => {
+    const contexts = { ...lineupsByContext, [lineupCtxKey]: lineup };
+    setElements(previous => {
+      const next = migrateOwnedElements(previous, contexts, { mapId: selectedMap, side });
+      return next.some((element, index) => element !== previous[index]) ? next : previous;
+    });
+  }, [lineup, lineupCtxKey, lineupsByContext, selectedMap, setElements, side]);
   const setLineup    = useCallback((next) => {
+    const current = normalizeLineup(lineupsByContext[lineupCtxKey] || DEFAULT_LINEUP);
+    const updated = normalizeLineup(typeof next === 'function' ? next(current) : next);
+    const changedColors = new Map(current.map((player, index) => [player.slotId, updated[index]?.color]));
+    setElements(elementsBefore => elementsBefore.map(element => {
+      const color = changedColors.get(element.ownerId);
+      return color && color !== element.color ? { ...element, color } : element;
+    }));
     setLineupsByContext(prev => {
-      const current = prev[lineupCtxKey] || DEFAULT_LINEUP;
-      const updated = typeof next === 'function' ? next(current) : next;
       return { ...prev, [lineupCtxKey]: updated };
     });
-  }, [lineupCtxKey, setLineupsByContext]);
+  }, [lineupCtxKey, lineupsByContext, setElements, setLineupsByContext]);
+  // Always-current setLineup so the once-attached global mouseup handler is never
+  // stale (it must write into the current map/side context, not the one from mount).
+  const setLineupRef = useRef(setLineup);
+  useEffect(() => { setLineupRef.current = setLineup; }, [setLineup]);
 
   // ── editor UI ──────────────────────────────────────────────────────────
   const [showGrid, setShowGrid]             = useState(false);
   const [exporting, setExporting]           = useState(false);
   const [exportModal, setExportModal]       = useState(false);
+  const [exportPreview, setExportPreview]   = useState(null);
+  const [exportReady, setExportReady]       = useState(false);
   const [selectedPlayerIdx, setSelectedPlayerIdx] = useState(null);
   const [lineupPickerOpen, setLineupPickerOpen] = useState(false);
   const [activeTool, setActiveTool]         = useState('arrow');
@@ -263,6 +331,9 @@ export default function EditorPage() {
   const [lineupEditIdx, setLineupEditIdx]   = useState(null);
   const [draggingGadget, setDraggingGadget] = useState(null);
   const draggingRef                         = useRef(null);
+  const pointerGadgetDragRef                = useRef(null);
+  const gadgetPreviewRef                    = useRef(null);
+  const gadgetDropRef                       = useRef(null);
   const [dragPreview, setDragPreview]       = useState(null);
   const [opDrag, setOpDrag]                 = useState(null); // { op, color, clientX, clientY }
   const opDragRef                           = useRef(null);
@@ -294,8 +365,24 @@ export default function EditorPage() {
     (!e.floor  || e.floor  === selectedFloor) &&
     (!e.mapId  || e.mapId  === selectedMap)
   );
+  const playbackPositions = timelineMode
+    ? getPlaybackPositions(timeline, timelinePlayback.currentTime, lineup)
+    : [];
+  const animatedOwnerIds = new Set(playbackPositions.map(position => position.ownerId));
+  const renderedElements = timelineMode
+    ? visibleElements.filter(element => element.type !== 'operator' || !animatedOwnerIds.has(element.ownerId))
+    : visibleElements;
   // Count reinforcements across ALL floors of this strat (max 10 is per-strat, not per-floor)
   const reinforceCount  = elements.filter(e => e.type === 'reinforcement' && (!e.mapId || e.mapId === selectedMap)).length;
+  const reinforcementCounts = useMemo(() => {
+    const counts = {};
+    elements.forEach(element => {
+      if (element.type !== 'reinforcement' || (element.mapId && element.mapId !== selectedMap)) return;
+      const ownerId = element.ownerId || getOwnerIdForColor(lineup, element.color) || 'unassigned';
+      counts[ownerId] = (counts[ownerId] || 0) + 1;
+    });
+    return counts;
+  }, [elements, lineup, selectedMap]);
 
   // Gadget placement counts per player color+gadget for lineup strip display.
   // Counted across ALL floors of this map (limits are per-strat, not per-floor).
@@ -304,41 +391,55 @@ export default function EditorPage() {
     elements.forEach(el => {
       if (el.type !== 'gadget') return;
       if (el.mapId && el.mapId !== selectedMap) return;
-      const key = `${el.color}:${el.gadget?.id}`;
+       const key = `${el.ownerId || getOwnerIdForColor(lineup, el.color) || el.color}:${el.gadget?.id}`;
       counts[key] = (counts[key] || 0) + 1;
     });
     return counts;
-  }, [elements, selectedMap]);
+  }, [elements, lineup, selectedMap]);
 
   // ── inject lineup from URL param (coming from LineupPage) ──────────────
   useEffect(() => {
     if (!spLineup) return;
     try {
       const players = JSON.parse(decodeURIComponent(spLineup));
-      const key = `${sp.get('map') || selectedMap}:${spSide || 'attack'}`;
+       const key = `${sp.get('map') || selectedMap}:${spSide || 'defend'}`;
       setLineupsByContext(prev => ({ ...prev, [key]: players }));
     } catch {}
   }, []); // eslint-disable-line
 
-  // ── load strat — only when stratId changes, NOT on every strats update ──
+  // Load a strat only when stratId changes, not on every strats update.
   const stratsRef = useRef(strats);
   useEffect(() => { stratsRef.current = strats; });
   useEffect(() => { autoStratIdRef.current = null; }, [stratId]);
 
   useEffect(() => {
-    if (!stratId) return;
+    if (!stratId) {
+      history.reset({ elements: [], lineupsByContext: {} });
+      setTimeline(normalizeTimeline());
+      setTasks([]);
+      setTimelineMode(false);
+      setStratName('Untitled Strat');
+      setSide(spSide || 'defend');
+      setDescription('');
+      setTags([]);
+      return;
+    }
     const s = stratsRef.current.find(x => x.id === stratId);
     if (!s) return;
     setStratName(s.name || 'Untitled Strat');
     setSelectedMap(s.mapId || '');
     setSelectedFloor(s.floor || '');
-    setSide(s.side || 'attack');
+    setSide(s.side || 'defend');
     setDescription(s.description || '');
     setTags(s.tags || []);
     let lbc = {};
-    if (s.lineupsByContext) lbc = s.lineupsByContext;
-    else if (s.lineup) lbc = { [`${s.mapId || 'none'}:${s.side || 'attack'}`]: s.lineup };
-    history.reset({ elements: s.elements || [], lineupsByContext: lbc });
+    if (s.lineupsByContext) lbc = normalizeLineupsByContext(s.lineupsByContext);
+    else if (s.lineup) lbc = { [`${s.mapId || 'none'}:${s.side || 'defend'}`]: normalizeLineup(s.lineup) };
+    history.reset({ elements: migrateOwnedElements(s.elements || [], lbc, { mapId: s.mapId, side: s.side || 'defend' }), lineupsByContext: lbc });
+    setTimeline(normalizeTimeline(s.timeline));
+    setTasks(normalizeTasks(s.tasks));
+    setTimelineMode(false);
+    setTimelinePointPick(null);
   }, [stratId]); // eslint-disable-line
 
   useEffect(() => {
@@ -368,6 +469,29 @@ export default function EditorPage() {
   useEffect(() => { floorRef.current = selectedFloor; }, [selectedFloor]);
   useEffect(() => { mapRef.current = selectedMap; }, [selectedMap]);
 
+  // Native drag operations can finish outside the webview. Always clear the
+  // transient preview on terminal browser events as well as on dragend.
+  useEffect(() => {
+    const clearDrag = () => {
+      pointerGadgetDragRef.current = null;
+      draggingRef.current = null;
+      setDraggingGadget(null);
+      setDragPreview(null);
+    };
+    window.addEventListener('dragend', clearDrag, true);
+    window.addEventListener('pointercancel', clearDrag, true);
+    window.addEventListener('lostpointercapture', clearDrag, true);
+    // Bubble after the canvas drop handler so the synchronous fallback ref is
+    // still available when a webview omits custom dataTransfer MIME types.
+    window.addEventListener('drop', clearDrag);
+    return () => {
+      window.removeEventListener('dragend', clearDrag, true);
+      window.removeEventListener('pointercancel', clearDrag, true);
+      window.removeEventListener('lostpointercapture', clearDrag, true);
+      window.removeEventListener('drop', clearDrag);
+    };
+  }, []);
+
   // Global mouse handlers for operator custom drag (attached once)
   useEffect(() => {
     const onMove = e => {
@@ -385,7 +509,7 @@ export default function EditorPage() {
       const card = target?.closest('[data-lineup-idx]');
       if (card) {
         const idx = parseInt(card.getAttribute('data-lineup-idx'));
-        setLineup(prev => prev.map((p, i) => i === idx
+        setLineupRef.current(prev => prev.map((p, i) => i === idx
           ? { ...p, operator: drag.op, gadget: drag.op?.gadget || null, secondaryGadget: drag.op?.secondaries?.[0] || null }
           : p
         ));
@@ -398,28 +522,31 @@ export default function EditorPage() {
       if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
       const x = ((e.clientX - rect.left) / rect.width) * 100;
       const y = ((e.clientY - rect.top) / rect.height) * 100;
-      setElements(prev => [...prev, {
-        id: createElementId(), type: 'operator',
-        op: drag.op, x, y,
-        side: sideRef.current, color: drag.color,
+       setElements(prev => [...prev, {
+         id: createElementId(), type: 'operator',
+         op: drag.op, x, y,
+         side: sideRef.current, color: drag.color, ownerId: getOwnerIdForColor(lineup, drag.color),
         floor: floorRef.current, mapId: mapRef.current,
       }]);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp, true);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp, true); };
-  }, []); // eslint-disable-line
+  }, [lineup]); // eslint-disable-line
 
+  const toastTimerRef = useRef(null);
   const showToast = useCallback(m => {
     setToast(m);
-    setTimeout(() => setToast(''), 2500);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => { toastTimerRef.current = null; setToast(''); }, 2500);
   }, []);
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   const currentMap = ALL_MAPS.find(m => m.id === selectedMap);
   const mapImage   = MAP_BLUEPRINTS[selectedMap]?.[selectedFloor] ?? null;
 
   // ── Auto-detect walls ────────────────────────────────────────────────────
-  // Always run detection — even for maps with manual wall positions — so we
+  // Always run detection, including maps with manual wall positions, so we
   // can enrich manual walls with real pixel-accurate w/h dimensions.
   useEffect(() => {
     if (!mapImage || !selectedMap || !selectedFloor) return;
@@ -436,7 +563,7 @@ export default function EditorPage() {
 
     let cancelled = false;
     const hasManual = MAP_WALLS[selectedMap]?.[selectedFloor]?.some(w => w.type === 'wall' || w.type === 'hatch');
-    // For manual-wall maps only run a lightweight pass (no hatch detection needed — just dims)
+    // Manual-wall maps only need a lightweight pass because hatch detection is unnecessary.
     setDetectingWalls(!hasManual);
     detectWalls(mapImage, { hatches: !hasManual })
       .then(({ walls, doors, hatches }) => {
@@ -516,6 +643,28 @@ export default function EditorPage() {
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
     const onKey = e => {
+      if (e.key === 'Escape') {
+        if (lineupEditIdx !== null) {
+          e.preventDefault();
+          setLineupEditIdx(null);
+          return;
+        }
+        if (lineupPickerOpen) {
+          e.preventDefault();
+          setLineupPickerOpen(false);
+          return;
+        }
+        if (timelinePointPick) {
+          e.preventDefault();
+          setTimelinePointPick(null);
+          return;
+        }
+        if (pendingCallout) {
+          e.preventDefault();
+          setPendingCallout(null);
+          return;
+        }
+      }
       const tag = e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
 
@@ -588,7 +737,7 @@ export default function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedIds, textInput.active, elements, setElements, visibleElements]);
+  }, [selectedIds, textInput.active, elements, setElements, visibleElements, lineupEditIdx, lineupPickerOpen, timelinePointPick, pendingCallout]);
 
   // ── Canvas coordinate helper ─────────────────────────────────────────────
   const toCanvas = (clientX, clientY) => {
@@ -605,19 +754,19 @@ export default function EditorPage() {
   // ── Drag start helper ────────────────────────────────────────────────────
   const startDrag = (e, elementId) => {
     if (e.button !== 0) return false;
+    const clickedElement = elements.find(element => element.id === elementId);
     // Alt+click = recolor to the active player's color (whole selection if it's part of one).
-    if (e.altKey) {
+    if (e.altKey && clickedElement?.type !== 'gadget') {
       e.stopPropagation();
       const ids = selectedIds.includes(elementId) && selectedIds.length > 1 ? selectedIds : [elementId];
       setElements(prev => recolorElements(prev, ids, activeColor), { groupKey: 'recolor' });
       return true;
     }
-    const clickedElement = elements.find(element => element.id === elementId);
     if (activeTool === 'eraser') {
       e.stopPropagation();
       return true;
     }
-    if (clickedElement?.color && clickedElement.color !== activeColor) {
+    if (clickedElement?.type !== 'gadget' && clickedElement?.color && clickedElement.color !== activeColor) {
       e.stopPropagation();
       setElements(prev => recolorElements(prev, [elementId], activeColor), { groupKey:'recolor' });
       if (activeTool === 'select') setSelectedIds([elementId]);
@@ -660,6 +809,17 @@ export default function EditorPage() {
     if (e.button === 1) { startPan(e); return; }
     if (e.button !== 0) return;
     const pt = toCanvas(e.clientX, e.clientY);
+
+    if (timelinePointPick) {
+      setTimelinePickedPoint({ kind: timelinePointPick, x: Math.max(0, Math.min(100, pt.x)), y: Math.max(0, Math.min(100, pt.y)), token: Date.now() });
+      setTimelinePointPick(null);
+      return;
+    }
+    if (pendingCallout) {
+      setElements(previous => [...previous, { id: createElementId(), type: 'text', text: pendingCallout, callout: true, x: Math.max(0, Math.min(100, pt.x)), y: Math.max(0, Math.min(100, pt.y)), color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
+      setPendingCallout(null);
+      return;
+    }
 
     if (activeTool === 'text') {
       setTextInput({ active:true, x:pt.x, y:pt.y, clientX:e.clientX, clientY:e.clientY, val:'' });
@@ -798,7 +958,10 @@ export default function EditorPage() {
     if (dragRef.current?.mode === 'drag') { dragRef.current = null; return; }
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
-    const pt = toCanvas(e.clientX, e.clientY);
+    // Clamp so a mouseup that fires just outside the canvas (e.g. from the
+    // onMouseLeave finalize) never writes an element endpoint off the map.
+    const raw = toCanvas(e.clientX, e.clientY);
+    const pt = { x: Math.min(100, Math.max(0, raw.x)), y: Math.min(100, Math.max(0, raw.y)) };
 
     if (activeTool === 'operator' && drawStartRef.current?.mode === 'op-place') {
       const op = pendingOp;
@@ -806,7 +969,7 @@ export default function EditorPage() {
       setIsDrawing(false);
       if (op) {
         setElements(prev => [...prev, { id: createElementId(), type: 'operator', op, x: pt.x, y: pt.y, side, color: activeColor, floor: selectedFloor, mapId: selectedMap }]);
-        setPendingOp(null); // auto-clear after placement — no sticky op
+        setPendingOp(null); // Auto-clear after placement.
       } else {
         showToast('Select an operator in the sidebar first');
       }
@@ -844,6 +1007,11 @@ export default function EditorPage() {
     if (e.altKey) return; // Alt+click is handled as recolor in startDrag
     if (activeTool === 'eraser') { setElements(prev => prev.filter(el => el.id !== id)); return; }
     const clickedElement = elements.find(element => element.id === id);
+    if (clickedElement?.type === 'gadget') {
+      if (activeTool === 'eraser') setElements(prev => prev.filter(el => el.id !== id));
+      else if (activeTool === 'select') setSelectedIds([id]);
+      return;
+    }
     if (clickedElement?.color && clickedElement.color !== activeColor) {
       setElements(previous => recolorElements(previous, [id], activeColor), { groupKey:'recolor' });
       if (activeTool === 'select') setSelectedIds([id]);
@@ -907,37 +1075,37 @@ export default function EditorPage() {
     const mapStrats = strats.filter(s => s.mapId === selectedMap);
     const autoName = stratName && stratName !== 'Untitled Strat' ? stratName : `${mapName} #${mapStrats.length + 1}`;
     const finalName = stratName && stratName !== 'Untitled Strat' ? stratName : autoName;
-    const s = { id: stratId || undefined, name: finalName, mapId: selectedMap, floor: selectedFloor, side, description, tags, elements, lineup, lineupsByContext };
+    const s = { id: stratId || undefined, name: finalName, mapId: selectedMap, floor: selectedFloor, side, description, tags, elements, lineup, lineupsByContext: normalizeLineupsByContext(lineupsByContext), timeline: normalizeTimeline(timeline), tasks: normalizeTasks(tasks) };
     const saved = saveStrat(s);
     if (!stratName || stratName === 'Untitled Strat') setStratName(finalName);
     showToast('Saved!');
     if (!stratId) navigate(`/editor/${saved.id}`, { replace: true });
   };
 
-  // Auto-save: debounce 2s, never navigates — only persists to localStorage
-  const autoSaveRef = useRef({ elements, lineupsByContext, stratName, side, selectedMap, selectedFloor, description, tags, stratId });
+  // Auto-save after 2s without navigating. Only localStorage is updated.
+  const autoSaveRef = useRef({ elements, lineupsByContext, stratName, side, selectedMap, selectedFloor, description, tags, stratId, timeline, tasks });
   useEffect(() => {
-    autoSaveRef.current = { elements, lineupsByContext, stratName, side, selectedMap, selectedFloor, description, tags, stratId };
-  });
+    autoSaveRef.current = { elements, lineupsByContext, stratName, side, selectedMap, selectedFloor, description, tags, stratId, timeline, tasks };
+  }, [elements, lineupsByContext, stratName, side, selectedMap, selectedFloor, description, tags, stratId, timeline, tasks]);
   useEffect(() => {
     if (!selectedMap) return;
     const t = setTimeout(() => {
       const r = autoSaveRef.current;
       if (!r.selectedMap) return;
-      // Don't auto-create strats for users just browsing — require either an
+      // Don't auto-create strats for users just browsing. Require either an
       // existing stratId (already saved once) or at least one drawn element.
       if (!r.stratId && r.elements.length === 0) return;
       const mapName = ALL_MAPS.find(m => m.id === r.selectedMap)?.name || 'Strat';
       const finalName = r.stratName && r.stratName !== 'Untitled Strat' ? r.stratName : `${mapName} Strat`;
       const currentId = r.stratId || autoStratIdRef.current;
-      const saved = saveStrat({ id: currentId || undefined, name: finalName, mapId: r.selectedMap, floor: r.selectedFloor, side: r.side, description: r.description, tags: r.tags, elements: r.elements, lineupsByContext: r.lineupsByContext });
-      // Track the generated ID in a ref — don't navigate (that would reset undo history).
+       const saved = saveStrat({ id: currentId || undefined, name: finalName, mapId: r.selectedMap, floor: r.selectedFloor, side: r.side, description: r.description, tags: r.tags, elements: r.elements, lineupsByContext: normalizeLineupsByContext(r.lineupsByContext), timeline: normalizeTimeline(r.timeline), tasks: normalizeTasks(r.tasks) });
+      // Track the generated ID in a ref. Navigating would reset undo history.
       if (!currentId && saved?.id) autoStratIdRef.current = saved.id;
     }, 2000);
     return () => clearTimeout(t);
   // selectedMap intentionally excluded: switching maps should not trigger auto-save.
   // selectedFloor/description/tags included so metadata-only edits persist too.
-  }, [elements, lineupsByContext, stratName, side, selectedFloor, description, tags]); // eslint-disable-line
+  }, [elements, lineupsByContext, stratName, side, selectedFloor, description, tags, timeline, tasks]); // eslint-disable-line
 
   // ── collab sync: remote → local (observe Yjs, apply without history push) ──
   // The floor is deliberately NOT shared: teammates need to work on different
@@ -949,14 +1117,17 @@ export default function EditorPage() {
     if (yMeta.has('description')) setDescription(yMeta.get('description'));
     if (yMeta.has('tags')) setTags(yMeta.get('tags'));
   }, []);
+  const applyCollabTimeline = useCallback(value => setTimeline(normalizeTimeline(value)), []);
+  const applyCollabTasks = useCallback(value => setTasks(normalizeTasks(value)), []);
 
   // ── collab: once initial state has synced, pull it, then allow local pushes ─
   const collabMeta = useMemo(() => ({
     name: stratName, side, map: selectedMap, description, tags,
   }), [stratName, side, selectedMap, description, tags]);
   useEditorCollaboration({
-    collab, room, elements, lineupsByContext, meta: collabMeta, history,
-    applyingRemoteRef, metaApplyingRef, canPushRef, setMeta: applyCollabMeta,
+    collab, room, elements, lineupsByContext, timeline, tasks, meta: collabMeta, history,
+    applyingRemoteRef, metaApplyingRef, timelineApplyingRef, tasksApplyingRef, canPushRef,
+    setMeta: applyCollabMeta, setTimeline: applyCollabTimeline, setTasks: applyCollabTasks,
   });
 
   // ── collab sync: local → remote (diff into Yjs maps, origin 'local') ──────
@@ -979,7 +1150,7 @@ export default function EditorPage() {
     next.set('room', id);
     next.set('collabHost', '1');
     setSp(next);
-    showToast('Live Collab is ready — share the invitation code');
+    showToast('Live Collab is ready. Share the invitation code.');
   }, [sp, setSp, showToast, updateCollabEndpoint]);
 
   const leaveCollab = useCallback(async () => {
@@ -1004,13 +1175,21 @@ export default function EditorPage() {
   // New invitation codes carry both the room and its tunnel. Raw legacy room codes still work.
   const joinCollab = useCallback((input) => {
     const invitation = parseCollabInvite(input);
+    // Joining a room pulls the room's content into this editor and replaces the
+    // current strat. Guard against silently destroying an open strat.
+    const hasLocalContent = !!stratId || elements.length > 0 || Object.keys(lineupsByContext).length > 0;
+    if (hasLocalContent && !window.confirm(
+      'Joining this room will replace your current strat with the room content. Continue?'
+    )) {
+      return;
+    }
     if (invitation.serverUrl) updateCollabEndpoint(invitation.serverUrl);
     const next = new URLSearchParams(sp);
     next.set('room', invitation.room);
     next.delete('collabHost');
     hostingCollabRef.current = false;
     setSp(next);
-  }, [sp, setSp, updateCollabEndpoint]);
+  }, [sp, setSp, updateCollabEndpoint, stratId, elements, lineupsByContext]);
 
   // Re-create the native host after a page/app reload. start_collab_host reuses
   // a healthy runtime and creates a fresh one only when none exists.
@@ -1066,7 +1245,7 @@ export default function EditorPage() {
         setCollabRecovering(true);
         if (!announcedRecovery) {
           announcedRecovery = true;
-          showToast('Tunnel interrupted — reconnecting automatically…');
+           showToast('Tunnel interrupted. Reconnecting automatically...');
         }
         const host = await invoke('restart_collab_tunnel');
         if (cancelled) return;
@@ -1074,7 +1253,7 @@ export default function EditorPage() {
         updateCollabEndpoint(host.serverUrl, host.localServerUrl || host.serverUrl);
         setCollabRecovering(false);
         announcedRecovery = false;
-        showToast('Tunnel restored — send the new invitation code');
+         showToast('Tunnel restored. Send the new invitation code.');
       } catch (error) {
         if (!cancelled) {
           setCollabRecovering(true);
@@ -1097,13 +1276,13 @@ export default function EditorPage() {
   const handleNewStrat = () => {
     if (window.confirm('Create a new empty strat?')) {
       navigate('/editor');
-      setTimeout(() => { history.reset({ elements: [], lineupsByContext: {} }); setStratName('Untitled Strat'); setDescription(''); setTags([]); }, 50);
+      setTimeout(() => { history.reset({ elements: [], lineupsByContext: {} }); setTimeline(normalizeTimeline()); setTasks([]); setTimelineMode(false); setTimelinePointPick(null); setStratName('Untitled Strat'); setSide('defend'); setDescription(''); setTags([]); }, 50);
     }
   };
 
   const handleDuplicateStrat = () => {
     const copy = {
-      ...JSON.parse(JSON.stringify({ elements, lineupsByContext, side, description, tags })),
+       ...JSON.parse(JSON.stringify({ elements, lineupsByContext, side, description, tags, timeline, tasks })),
       id: undefined,
       name: `${stratName} (Copy)`,
       mapId: selectedMap,
@@ -1130,25 +1309,254 @@ export default function EditorPage() {
     setSelectedIds([]);
   };
 
+  const openExportFolder = useCallback(async () => {
+    if (!exportReady) return;
+    if (!window.__TAURI_INTERNALS__) {
+      showToast('Exports are in your browser Downloads folder');
+      return;
+    }
+    try {
+      const [{ downloadDir }, { open }] = await Promise.all([
+        import('@tauri-apps/api/path'),
+        import('@tauri-apps/plugin-shell'),
+      ]);
+      await open(await downloadDir());
+    } catch (error) {
+      console.error('[PNG export folder]', error);
+      showToast('Could not open the export folder');
+    }
+  }, [exportReady, showToast]);
+
+  const startTimelinePlayback = () => {
+    setTimelineMode(true);
+    timelinePlayback.play();
+  };
+  const scrubTimeline = value => {
+    setTimelineMode(true);
+    timelinePlayback.scrub(value);
+  };
+  const exitTimelinePlayback = () => {
+    timelinePlayback.pause();
+    setTimelineMode(false);
+  };
+  const openRightPanelTab = tab => {
+    setRightPanelTab(tab);
+    setTimelineOpen(tab === 'timeline');
+    setTasksOpen(tab === 'tasks');
+    setCalloutsOpen(tab === 'callouts');
+  };
+  const toggleTimeline = () => {
+    if (timelineOpen) setTimelinePointPick(null);
+    if (timelineOpen && timelineMode) exitTimelinePlayback();
+    const nextOpen = !timelineOpen;
+    openRightPanelTab(nextOpen ? 'timeline' : 'details');
+  };
+  const exportTimeline = async () => {
+    const root = canvasInnerRef.current;
+    if (!root || !timeline.movements.length) return;
+    try {
+      showToast('Rendering WebM...');
+      const animatedOwners = new Set(timeline.movements.map(movement => movement.ownerId));
+      await exportTimelineAsWebM(root, `${stratName || 'strat'}-timeline`.replace(/[^\w-]/g, '_'), timeline, {
+        visibleElements: elements.filter(e => (!e.floor || e.floor === selectedFloor) && (!e.mapId || e.mapId === selectedMap) && !(e.type === 'operator' && animatedOwners.has(e.ownerId))),
+        overrideBlueprintSrc: mapImage,
+        lineup,
+        selectedFloor,
+        stratName,
+        side,
+      }, time => getPlaybackPositions(timeline, time, lineup));
+      showToast('✓ WebM saved');
+    } catch (error) {
+      console.error('[Timeline export]', error);
+      showToast('Animation export failed: ' + error.message);
+    }
+  };
+  const exportTimelineGif = async () => {
+    const root = canvasInnerRef.current;
+    if (!root || !timeline.movements.length) return;
+    try {
+      showToast('Rendering GIF...');
+      const animatedOwners = new Set(timeline.movements.map(movement => movement.ownerId));
+      await exportTimelineAsGIF(root, `${stratName || 'strat'}-timeline`.replace(/[^\w-]/g, '_'), timeline, {
+        visibleElements: elements.filter(e => (!e.floor || e.floor === selectedFloor) && (!e.mapId || e.mapId === selectedMap) && !(e.type === 'operator' && animatedOwners.has(e.ownerId))),
+        overrideBlueprintSrc: mapImage,
+        lineup,
+        selectedFloor,
+        stratName,
+        side,
+      }, time => getPlaybackPositions(timeline, time, lineup));
+      showToast('✓ GIF saved');
+    } catch (error) {
+      console.error('[Timeline GIF export]', error);
+      showToast('GIF export failed: ' + error.message);
+    }
+  };
+  const renderPngPreview = async (opts, floor) => {
+    const root = canvasInnerRef.current;
+    if (!root || !floor) return;
+    const isCurrent = floor === selectedFloor;
+    const canvas = await renderStratAsPNG(root, {
+      lineup: opts.withLineup ? lineup : [], reinforcementCounts,
+      stratName: opts.withMeta ? stratName : '', selectedFloor: opts.withMeta ? floor : '', side,
+      visibleElements: isCurrent ? elements.filter(e => (!e.floor || e.floor === floor) && (!e.mapId || e.mapId === selectedMap)) : null,
+      overrideBlueprintSrc: isCurrent ? null : MAP_BLUEPRINTS[selectedMap]?.[floor],
+      overrideFloorElements: isCurrent ? null : elements.filter(e => (!e.floor || e.floor === floor) && (!e.mapId || e.mapId === selectedMap)),
+    });
+    return canvas.toDataURL('image/png');
+  };
+
   const handleToolSelect = (toolId) => {
     setActiveTool(toolId);
     if (toolId !== 'operator') setPendingOp(null);
     if (toolId !== 'gadget') setPendingGadget(null);
   };
 
+  const clearGadgetDrag = useCallback(() => {
+    pointerGadgetDragRef.current = null;
+    draggingRef.current = null;
+    setDraggingGadget(null);
+    setDragPreview(null);
+  }, []);
+
+  const updateGadgetPreviewAt = (clientX, clientY, drag) => {
+    const inner = canvasInnerRef.current;
+    if (!inner || !drag?.gadget) return;
+    const rect = inner.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      setDragPreview(null);
+      return;
+    }
+    const pt = toCanvas(clientX, clientY);
+    const gadget = GADGETS[drag.gadget.id] || drag.gadget;
+    const nearest = findNearestGadgetMarker(gadget, pt, interactiveWalls);
+    if (nearest) {
+      const slot = getNextAttachmentSlot(elements, nearest.marker.id);
+      const slotSpacingScale = Math.max(
+        1,
+        ...elements
+          .filter(element => element.type === 'gadget' && element.wallId === nearest.marker.id)
+          .map(element => element.scale || 1)
+      );
+      const position = getAttachedGadgetPosition(nearest.marker, { slot, slotSpacingScale });
+      setDragPreview({ ...drag, gadget, ...position, anchor: nearest.marker });
+    } else {
+      setDragPreview({ ...drag, gadget, x: pt.x, y: pt.y, invalid: requiresMarker(gadget) });
+    }
+  };
+
+  const placeGadgetAt = (clientX, clientY, drag) => {
+    const inner = canvasInnerRef.current;
+    if (!inner || !drag?.gadget) return false;
+    const rect = inner.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return false;
+
+    const pt = toCanvas(clientX, clientY);
+    const g = GADGETS[drag.gadget.id] || drag.gadget;
+    const c = drag.color || activeColor;
+    const ownerId = drag.ownerId || getOwnerIdForColor(lineup, c);
+    if (!g) return true;
+
+    const placed = elements.filter(element =>
+      element.type === 'gadget'
+      && element.gadget?.id === g.id
+      && (element.ownerId ? element.ownerId === ownerId : element.color === c)
+      && (!element.mapId || element.mapId === selectedMap)
+    ).length;
+    const player = lineup.find(item => item.slotId === ownerId) || lineup.find(item => item.color === c);
+    const limit = g.count ?? 99;
+    if (player?.operator) {
+      const signatureId = player.operator.gadget?.id;
+      const secondaryId = player.secondaryGadget?.id;
+      if (g.id !== signatureId && g.id !== secondaryId) {
+        showToast(`${g.label} not in ${player.name || 'Player'}'s loadout`);
+        return true;
+      }
+    }
+    if (placed >= limit) {
+      showToast(`Limit reached: ${limit}× ${g.label}`);
+      return true;
+    }
+
+    const nearest = findNearestGadgetMarker(g, pt, interactiveWalls);
+    if (requiresMarker(g) && !nearest) {
+      const types = g.markerTypes || [];
+      const acceptsWalls = types.some(type => type === 'wall' || type === 'softwall');
+      const acceptsOpenings = types.some(type => type === 'door' || type === 'window' || type === 'hatch');
+      const target = acceptsWalls && acceptsOpenings
+        ? 'marked walls, doors, windows or hatches'
+        : g.placement === 'opening'
+          ? 'marked doors, windows or hatches'
+          : 'marked walls';
+      showToast(`${g.label} can only be placed on ${target}`);
+    } else if (nearest) {
+      setElements(previous => upsertAttachedGadget(previous, nearest.marker, g, c, {
+        floor: selectedFloor, mapId: selectedMap, ownerId,
+      }));
+    } else {
+      setElements(previous => [...previous, {
+        id: createElementId(), type: 'gadget', gadget: g,
+        x: pt.x, y: pt.y, color: c, ownerId,
+        floor: selectedFloor, mapId: selectedMap,
+      }]);
+    }
+    return true;
+  };
+
+  useEffect(() => {
+    gadgetPreviewRef.current = updateGadgetPreviewAt;
+    gadgetDropRef.current = placeGadgetAt;
+  });
+
+  useEffect(() => {
+    const onPointerMove = event => {
+      const drag = pointerGadgetDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      gadgetPreviewRef.current?.(event.clientX, event.clientY, drag);
+    };
+    const onPointerUp = event => {
+      const drag = pointerGadgetDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      gadgetDropRef.current?.(event.clientX, event.clientY, drag);
+      clearGadgetDrag();
+    };
+    const onPointerCancel = event => {
+      if (pointerGadgetDragRef.current?.pointerId === event.pointerId) clearGadgetDrag();
+    };
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerCancel, true);
+    };
+  }, [clearGadgetDrag]);
+
+  const handleLineupGadgetPointerStart = (event, gadget, color, ownerId) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const drag = { gadget, color, ownerId, pointerId: event.pointerId };
+    pointerGadgetDragRef.current = drag;
+    draggingRef.current = drag;
+    setDraggingGadget(drag);
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+  };
+
   const handleGadgetDragStart = (event, gadget) => {
     event.dataTransfer.effectAllowed = 'copy';
-    event.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget, color:activeColor }));
+    const ownerId = getOwnerIdForColor(lineup, activeColor);
+    event.dataTransfer.setData('application/x-clav-gadget', JSON.stringify({ gadget, color:activeColor, ownerId }));
     event.dataTransfer.setDragImage(makeDragGhost(gadget.icon, activeColor), 22, 22);
-    const drag = { gadget, color:activeColor };
+    const drag = { gadget, color:activeColor, ownerId };
     draggingRef.current = drag;
     setDraggingGadget(drag);
   };
 
   const handleGadgetDragEnd = () => {
-    draggingRef.current = null;
-    setDraggingGadget(null);
-    setDragPreview(null);
+    clearGadgetDrag();
   };
 
   const handleOperatorMouseDown = (event, operator) => {
@@ -1220,9 +1628,17 @@ export default function EditorPage() {
           onDetectWalls={reDetectWalls}
           onToggleGrid={() => setShowGrid(value => !value)}
           onResetView={resetView}
-          onClear={handleClearElements}
-          onExport={() => setExportModal(true)}
-          onOpenLineup={() => setLineupPickerOpen(true)}
+           onClear={handleClearElements}
+           onExport={() => setExportModal(true)}
+           onOpenLineup={() => setLineupPickerOpen(true)}
+           exportReady={exportReady}
+           onOpenExportFolder={openExportFolder}
+           timelineOpen={timelineOpen}
+           onToggleTimeline={toggleTimeline}
+           tasksOpen={tasksOpen}
+           onToggleTasks={() => openRightPanelTab(tasksOpen ? 'details' : 'tasks')}
+           calloutsOpen={calloutsOpen}
+           onToggleCallouts={() => openRightPanelTab(calloutsOpen ? 'details' : 'callouts')}
         />
         <StratActions
           description={description}
@@ -1239,7 +1655,9 @@ export default function EditorPage() {
           tools={DRAW_TOOLS}
           activeTool={activeTool}
           activeColor={activeColor}
-          reinforcementCount={reinforceCount}
+           reinforcementCount={reinforceCount}
+           reinforcementCounts={reinforcementCounts}
+           lineup={lineup}
           rotateOrientation={rotateOrient}
           gadgetCategory={gadgetCat}
           gadgets={ALL_GADGETS}
@@ -1282,7 +1700,7 @@ export default function EditorPage() {
 
       {/* Canvas */}
       <div ref={containerRef} className="editor-canvas-area"
-        style={{cursor:getCursor(),overflow:'hidden',position:'relative',userSelect:'none'}}
+        style={{cursor:timelinePointPick ? 'crosshair' : getCursor(),overflow:'hidden',position:'relative',userSelect:'none'}}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
         onDoubleClick={() => { if (routeDraftRef.current) finishRoute(); }}
         onContextMenu={e => { e.preventDefault(); if (routeDraftRef.current) finishRoute(); }}
@@ -1310,27 +1728,28 @@ export default function EditorPage() {
           }
         }}
         onDragLeave={() => setDragPreview(null)}
-        onDrop={e => {
+         onDrop={e => {
           e.preventDefault();
           const pt = toCanvas(e.clientX, e.clientY);
           let opPayload = null, gadgetPayload = null;
           try { opPayload     = JSON.parse(e.dataTransfer.getData('application/x-clav-operator')); } catch {}
-          try { gadgetPayload = JSON.parse(e.dataTransfer.getData('application/x-clav-gadget'));   } catch {}
+           try { gadgetPayload = JSON.parse(e.dataTransfer.getData('application/x-clav-gadget'));   } catch {}
           if (opPayload?.op) {
-            setElements(prev => [...prev, { id: createElementId(), type: 'operator', op: opPayload.op, x: pt.x, y: pt.y, side: opPayload.side || side, color: opPayload.color || activeColor, floor: selectedFloor, mapId: selectedMap }]);
+             setElements(prev => [...prev, { id: createElementId(), type: 'operator', op: opPayload.op, x: pt.x, y: pt.y, side: opPayload.side || side, color: opPayload.color || activeColor, ownerId: opPayload.ownerId || getOwnerIdForColor(lineup, opPayload.color || activeColor), floor: selectedFloor, mapId: selectedMap }]);
             setPendingOp(null);
           } else {
             // draggingRef is set synchronously on dragstart (both gadget tab AND lineup),
-            // so it's reliable on the very first drag — unlike the async draggingGadget
+             // so it is reliable on the first drag, unlike the async draggingGadget
             // state or the webview's flaky custom-MIME dataTransfer.
             const rawG = gadgetPayload?.gadget || draggingRef.current?.gadget || draggingGadget?.gadget;
             // Resolve against the current gadget definition (id) so a gadget dragged
-            // from the lineup — where the stored object may predate placement/count
-            // changes — behaves identically to one from the gadget tab.
+             // from the lineup may predate placement or count changes. Resolve it
+             // so it behaves like a gadget from the tool tab.
             const g = (rawG && GADGETS[rawG.id]) || rawG;
-            const c = gadgetPayload?.color  || draggingRef.current?.color || draggingGadget?.color || activeColor;
-            if (g) {
-              const placed = elements.filter(el => el.type==='gadget' && el.gadget?.id===g.id && el.color===c && (!el.mapId || el.mapId===selectedMap)).length;
+             const c = gadgetPayload?.color  || draggingRef.current?.color || draggingGadget?.color || activeColor;
+             const ownerId = gadgetPayload?.ownerId || draggingRef.current?.ownerId || draggingGadget?.ownerId || getOwnerIdForColor(lineup, c);
+             if (g) {
+               const placed = elements.filter(el => el.type==='gadget' && el.gadget?.id===g.id && (el.ownerId ? el.ownerId === ownerId : el.color === c) && (!el.mapId || el.mapId===selectedMap)).length;
               // Lineup-aware limit: if player has an operator, only allow gadgets from their loadout
               const player = lineup.find(p => p.color === c);
               let limit = g.count ?? 99;
@@ -1360,18 +1779,26 @@ export default function EditorPage() {
                       : 'marked walls';
                   showToast(`${g.label} can only be placed on ${target}`);
                 } else if (nearest) {
-                  setElements(previous => upsertAttachedGadget(previous, nearest.marker, g, c, {
-                    floor:selectedFloor, mapId:selectedMap,
-                  }));
-                } else {
-                  setElements(prev => [...prev, { id: createElementId(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, floor: selectedFloor, mapId: selectedMap }]);
+                   setElements(previous => upsertAttachedGadget(previous, nearest.marker, g, c, {
+                     floor:selectedFloor, mapId:selectedMap, ownerId,
+                   }));
+                 } else {
+                   setElements(prev => [...prev, { id: createElementId(), type: 'gadget', gadget: g, x: pt.x, y: pt.y, color: c, ownerId, floor: selectedFloor, mapId: selectedMap }]);
                 }
               }
             }
           }
           setDraggingGadget(null);
           setDragPreview(null);
-        }}>
+         }}>
+        <div className={`editor-mode-badge ${timelineMode ? 'playback' : timelinePointPick || pendingCallout ? 'pick' : ''}`}>
+          {timelinePointPick ? `PICK ${timelinePointPick.toUpperCase()} POINT` : pendingCallout ? 'PLACE CALLOUT' : timelineMode ? `TIMELINE PLAYBACK · ${timelinePlayback.currentTime.toFixed(1)}s` : 'STATIC EDITING'}
+        </div>
+        {timelinePointPick && (
+          <div style={{ position:'absolute', top:12, left:'50%', transform:'translateX(-50%)', zIndex:40, padding:'7px 12px', border:'1px solid var(--accent-gold)', borderRadius:5, background:'rgba(8,10,14,0.94)', color:'var(--accent-gold)', fontFamily:'var(--font-mono)', fontSize:11, pointerEvents:'none' }}>
+            Click the map to set the {timelinePointPick === 'start' ? 'start position' : 'destination'} · Esc to cancel
+          </div>
+        )}
 
         {currentMap && (
           <div className="floor-tabs" style={{zIndex:20}}>
@@ -1421,7 +1848,8 @@ export default function EditorPage() {
               <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',overflow:'visible'}}>
                 {interactiveWalls.map(w => (
                   <InteractiveWall key={w.id} w={w} activeTool={activeTool} activeColor={activeColor}
-                    elements={visibleElements} setElements={setElements} reinforceCount={reinforceCount}
+                     elements={visibleElements} setElements={setElements} reinforceCount={reinforceCount}
+                     activeOwnerId={getOwnerIdForColor(lineup, activeColor)}
                     showToast={showToast} selectedFloor={selectedFloor} selectedMap={selectedMap}
                     pendingGadget={
                       (activeTool === 'gadget' ? pendingGadget : null) ||
@@ -1439,7 +1867,7 @@ export default function EditorPage() {
                     })}
                     onHoverChange={id => { hoveredWallIdRef.current = id; }}/>
                 ))}
-                {visibleElements.map(el => {
+                 {renderedElements.map(el => {
                   if (el.type === 'operator') {
                     const sel     = selectedIds.includes(el.id);
                     const opScale = el.scale || 1;
@@ -1463,8 +1891,22 @@ export default function EditorPage() {
                       </foreignObject>
                     );
                   }
-                  return renderEl(el);
-                })}
+                   return renderEl(el);
+                 })}
+                 {timelineMode && playbackPositions.map(position => {
+                   const player = position.player;
+                   const op = player?.operator;
+                   if (!player || !op) return null;
+                   const size = 36;
+                   return (
+                     <foreignObject key={`timeline-${position.ownerId}`} x={`${position.x}%`} y={`${position.y}%`} width={size + 8} height={size + 8}
+                       style={{ transform:`translate(${-(size + 8) / 2}px,${-(size + 8) / 2}px)`, overflow:'visible', pointerEvents:'none' }}>
+                       <div xmlns="http://www.w3.org/1999/xhtml" style={{ width:size, height:size, borderRadius:'50%', border:`2.5px solid ${player.color}`, background:'rgba(8,10,14,0.9)', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', boxShadow:`0 0 12px ${player.color}` }}>
+                         <OpImg op={op} color={player.color}/>
+                       </div>
+                     </foreignObject>
+                   );
+                 })}
                 {currentPath && renderEl(currentPath, true)}
                 {routeDraft && (() => {
                   const pts = [...routeDraft.points, ...(routeCursor ? [routeCursor] : [])];
@@ -1546,10 +1988,22 @@ export default function EditorPage() {
         )}
 
         {selectedMap && (
-          <LineupStrip
-            lineup={lineup} side={side} gadgetCounts={gadgetCounts}
+           <LineupStrip
+             lineup={lineup} side={side} gadgetCounts={gadgetCounts} reinforcementCounts={reinforcementCounts}
+             expanded={lineupExpanded} onToggleExpanded={() => setLineupExpanded(value => !value)}
             onEdit={idx => setLineupEditIdx(idx)}
-            onDragGadget={(g,c) => { const d = { gadget:g, color:c }; draggingRef.current = d; setDraggingGadget(d); }}
+            onPointerDragGadget={handleLineupGadgetPointerStart}
+            onDragGadget={(g,c,ownerId) => {
+             if (!g) {
+               draggingRef.current = null;
+               setDraggingGadget(null);
+               setDragPreview(null);
+               return;
+             }
+             const d = { gadget:g, color:c, ownerId };
+             draggingRef.current = d;
+             setDraggingGadget(d);
+           }}
             selectedPlayerIdx={selectedPlayerIdx}
             onSelectPlayer={(idx, color) => {
               setSelectedPlayerIdx(prev => prev === idx ? null : idx);
@@ -1561,7 +2015,32 @@ export default function EditorPage() {
 
       {/* Right Panel */}
       <aside className="editor-sidebar right">
-        {selectedIds.length === 1 && (() => {
+        <div className="right-panel-tabs" role="tablist" aria-label="Editor side panels">
+          {[['details', 'Details'], ['utility', 'Utility'], ['timeline', 'Timeline'], ['tasks', 'Tasks'], ['callouts', 'Callouts']].map(([tab, label]) => <button key={tab} role="tab" aria-selected={rightPanelTab === tab} className={rightPanelTab === tab ? 'active' : ''} onClick={() => openRightPanelTab(tab)}>{label}</button>)}
+        </div>
+        {rightPanelTab === 'utility' && selectedMap && <UtilityPanel lineup={lineup} gadgetCounts={gadgetCounts} />}
+        {rightPanelTab === 'timeline' && (
+          <TimelinePanel
+            timeline={timeline}
+            onChange={setTimeline}
+            lineup={lineup}
+            playback={{
+              ...timelinePlayback,
+              play: startTimelinePlayback,
+              scrub: scrubTimeline,
+            }}
+            playbackMode={timelineMode}
+            onExitPlayback={exitTimelinePlayback}
+            onExport={exportTimeline}
+            onExportGif={exportTimelineGif}
+            pointPick={timelinePointPick}
+            onRequestPoint={setTimelinePointPick}
+            pickedPoint={timelinePickedPoint}
+          />
+        )}
+        {rightPanelTab === 'tasks' && <TaskPanel tasks={tasks} onChange={value => setTasks(normalizeTasks(value))} lineup={lineup} phases={timeline.phases} />}
+        {rightPanelTab === 'callouts' && <CalloutPanel mapId={selectedMap} onPlace={value => setPendingCallout(value)} />}
+        {rightPanelTab === 'details' && selectedIds.length === 1 && (() => {
           const sel = visibleElements.find(e => e.id === selectedIds[0]);
           if (!sel) return null;
           const sizable = ['gadget','reinforcement','barricade','rotate','headline','feetline','verticalholes','operator'].includes(sel.type);
@@ -1593,13 +2072,13 @@ export default function EditorPage() {
             <div className="sidebar-section" style={{ borderBottom: '2px solid var(--accent-gold)' }}>
               <div className="sidebar-section-title" style={{ color: 'var(--accent-gold)' }}>⚙ {label}</div>
               <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:6, marginBottom:4 }}>
-                GRÖSSE — {Math.round(scale * 100)}%
+                 GRÖSSE: {Math.round(scale * 100)}%
               </div>
               <input type="range" min="0.3" max="3" step="0.05" value={scale}
                 onChange={e => applyScale(Number(e.target.value))}
                 style={{ width:'100%', accentColor:'var(--accent-gold)' }} />
               <div style={{ display:'flex', gap:4, marginTop:6 }}>
-                {[0.5, 1, 1.5, 2].map(v => (
+                 {[0.5, 0.75, 1, 1.5, 2].map(v => (
                   <button key={v}
                     onClick={() => applyScale(v)}
                     style={{ flex:1, background: Math.abs((sel.scale ?? 1) - v) < 0.04 ? 'var(--accent-gold)' : 'var(--bg-panel)', color: Math.abs((sel.scale ?? 1) - v) < 0.04 ? 'var(--bg-void)' : 'var(--text-secondary)', border:'1px solid var(--border-subtle)', borderRadius:3, padding:'3px 6px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>
@@ -1610,7 +2089,7 @@ export default function EditorPage() {
               {sel.type === 'gadget' && (
                 <>
                   <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'var(--font-mono)', marginTop:12, marginBottom:4 }}>
-                    AUSRICHTUNG — {sel.rotation || 0}°
+                     AUSRICHTUNG: {sel.rotation || 0}°
                   </div>
                   <div style={{ display:'flex', gap:4 }}>
                     {[0, 90, 180, 270].map(degrees => (
@@ -1649,7 +2128,7 @@ export default function EditorPage() {
           );
         })()}
 
-        <div className="sidebar-section">
+        {rightPanelTab === 'details' && <div className="sidebar-section">
           <div className="sidebar-section-title">Strat Details</div>
           <div className="strat-details">
             <div className="detail-field">
@@ -1674,19 +2153,24 @@ export default function EditorPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div>}
 
-        <div className="sidebar-section">
+        {rightPanelTab === 'details' && <div className="sidebar-section">
           <div className="sidebar-section-title">Controls</div>
-          <div style={{fontSize:11,color:'var(--text-muted)',lineHeight:1.9}}>
-            <div>🖱 <b style={{color:'var(--text-secondary)'}}>Scroll</b> → Zoom to mouse</div>
-            <div>🖱 <b style={{color:'var(--text-secondary)'}}>Middle Mouse</b> → Pan</div>
-            <div>🔍 <b style={{color:'var(--text-secondary)'}}>% Button</b> → Reset</div>
-            <div>🧱 <b style={{color:'var(--text-secondary)'}}>Reinforce</b> → walls/hatches only</div>
-            <div>🚧 <b style={{color:'var(--text-secondary)'}}>Barricade</b> → on Door/Window markers only</div>
-            <div>↖ <b style={{color:'var(--text-secondary)'}}>Select</b> → Rectangle, Del=delete</div>
+          <div style={{fontSize:11,color:'var(--text-muted)',lineHeight:1.75}}>
+            <div>🖱 <b style={{color:'var(--text-secondary)'}}>Scroll</b> → Zoom to cursor</div>
+            <div>🖱 <b style={{color:'var(--text-secondary)'}}>Middle mouse</b> → Pan map</div>
+            <div>🔍 <b style={{color:'var(--text-secondary)'}}>Zoom button</b> → Reset view</div>
+            <div>👤 <b style={{color:'var(--text-secondary)'}}>Lineup player</b> → Select owner/color</div>
+            <div>✎ <b style={{color:'#FF7777'}}>Red Edit</b> → Configure operator</div>
+            <div>🎒 <b style={{color:'var(--text-secondary)'}}>Gadget icon</b> → Drag to map</div>
+            <div>🔒 <b style={{color:'var(--text-secondary)'}}>Gadget color</b> → Owner-locked</div>
+            <div>🧱 <b style={{color:'var(--text-secondary)'}}>Reinforce</b> → Assign selected player · max 10</div>
+            <div>⏱ <b style={{color:'var(--text-secondary)'}}>Timeline</b> → Plan and play movements</div>
+            <div>↖ <b style={{color:'var(--text-secondary)'}}>Select</b> → Move, rectangle-select, Del=delete</div>
+            <div>⌨ <b style={{color:'var(--text-secondary)'}}>Esc</b> → Close active menu</div>
           </div>
-        </div>
+        </div>}
       </aside>
 
       {lineupEditIdx !== null && (
@@ -1701,70 +2185,28 @@ export default function EditorPage() {
 
       <EditorToast message={toast}/>
 
-      {/* Lineup Picker Modal */}
-      {lineupPickerOpen && (() => {
-        const stored = (() => { try { return JSON.parse(localStorage.getItem('clav-lineups-v2') || '{}'); } catch { return {}; } })();
-        const ctxKey = `${selectedMap}:${side}`;
-        const anyKey = `any:${side}`;
-        const mapLineups  = stored[ctxKey]  || [];
-        const anyLineups  = stored[anyKey]   || [];
-        const all = [
-          ...mapLineups.map(l => ({ ...l, source: 'Map' })),
-          ...anyLineups.map(l => ({ ...l, source: 'Universal' })),
-        ];
-        return (
-          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
-            onClick={() => setLineupPickerOpen(false)}>
-            <div style={{ background:'var(--bg-surface)', border:'1px solid var(--border-accent)', borderRadius:12, padding:24, minWidth:360, maxWidth:480, maxHeight:'70vh', overflowY:'auto', boxShadow:'0 16px 48px rgba(0,0,0,0.7)' }}
-              onClick={e => e.stopPropagation()}>
-              <div style={{ fontFamily:'var(--font-mono)', fontSize:11, letterSpacing:2, color:'var(--accent-gold)', marginBottom:16 }}>📋 LOAD LINEUP</div>
-              {all.length === 0 ? (
-                <div style={{ color:'var(--text-muted)', fontSize:13, padding:'20px 0' }}>No saved lineups for {side === 'attack' ? 'Attack' : 'Defense'} gefunden.<br/>Create lineups in the Lineup Creator.</div>
-              ) : (
-                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                  {all.map(lu => (
-                    <button key={lu.id}
-                      style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', background:'var(--bg-panel)', border:'1px solid var(--border-subtle)', borderRadius:8, cursor:'pointer', textAlign:'left', width:'100%' }}
-                      onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent-gold)'}
-                      onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
-                      onClick={() => {
-                        setLineupsByContext(prev => ({ ...prev, [lineupCtxKey]: lu.players }));
-                        setLineupPickerOpen(false);
-                        showToast(`Lineup "${lu.name}" loaded`);
-                      }}>
-                      <div style={{ display:'flex', gap:3 }}>
-                        {(lu.players || []).slice(0, 5).map((p, i) => (
-                          <div key={p.color+i} style={{ width:8, height:8, borderRadius:'50%', background: p.color, flexShrink:0 }} />
-                        ))}
-                      </div>
-                      <div style={{ flex:1 }}>
-                        <div style={{ color:'var(--text-primary)', fontSize:13, fontWeight:600 }}>{lu.name}</div>
-                        <div style={{ color:'var(--text-muted)', fontSize:11, marginTop:2 }}>
-                          {lu.source} · {(lu.players || []).filter(p => p.operator).map(p => p.operator.name).join(', ') || 'Empty'}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button style={{ marginTop:16, width:'100%', background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:12 }}
-                onClick={() => setLineupPickerOpen(false)}>Close</button>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* Export Modal */}
       {exportModal && (
         <ExportModal
           floors={currentMap?.floors || []}
           selectedFloor={selectedFloor}
-          onClose={() => setExportModal(false)}
-          onExport={async (opts) => {
-            setExportModal(false);
+           onClose={() => setExportModal(false)}
+           onPreview={async (opts) => {
+             if (!canvasInnerRef.current || !opts.floors[0]) return;
+             try {
+               const floor = opts.floors[0];
+                setExportPreview({ src: await renderPngPreview(opts, floor), floor, floors: opts.floors, options: opts });
+             } catch (error) {
+               console.error('[PNG preview]', error);
+               showToast('Preview failed: ' + error.message);
+             }
+           }}
+           onExport={async (opts) => {
+             setExportModal(false);
             const root = canvasInnerRef.current;
             if (!root) { showToast('Canvas not ready'); return; }
-            setExporting(true);
+             setExporting(true);
+             setExportReady(false);
             showToast('Exporting...');
             try {
               const floorsToExport = opts.floors;
@@ -1774,7 +2216,8 @@ export default function EditorPage() {
                   root,
                   `${stratName||'strat'}-${floor}`.replace(/[^\w-]/g,'_'),
                   {
-                    lineup: opts.withLineup ? lineup : [],
+                     lineup: opts.withLineup ? lineup : [],
+                     reinforcementCounts,
                     stratName: opts.withMeta ? stratName : '',
                     selectedFloor: opts.withMeta ? floor : '',
                     side,
@@ -1784,7 +2227,8 @@ export default function EditorPage() {
                   }
                 );
               }
-              showToast(`✓ ${floorsToExport.length} PNG${floorsToExport.length > 1 ? 's' : ''} saved`);
+               showToast(`✓ ${floorsToExport.length} PNG${floorsToExport.length > 1 ? 's' : ''} saved`);
+               setExportReady(true);
             } catch (err) {
               console.error('[PNG Export]', err);
               showToast('Export failed: ' + err.message);
@@ -1794,6 +2238,18 @@ export default function EditorPage() {
           }}
         />
       )}
+
+      {exportPreview && <ExportPreviewModal
+        src={exportPreview.src}
+        floor={exportPreview.floor}
+        floors={exportPreview.floors}
+        options={exportPreview.options}
+        onClose={() => setExportPreview(null)}
+        onFloor={async floor => {
+          const src = await renderPngPreview(exportPreview.options, floor);
+          setExportPreview(current => ({ ...current, src, floor }));
+        }}
+      />}
 
       {/* Lineup Picker Modal */}
       {lineupPickerOpen && (() => {

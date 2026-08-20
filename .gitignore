@@ -4,6 +4,7 @@
 # production builds
 /build
 /dist
+/public/gif.worker.js
 
 # tauri / rust
 /src-tauri/target
@@ -24,6 +25,8 @@
 
 # misc
 .env.local
+.env
+clav-strats/
 .DS_Store
 *.log
 npm-debug.log*

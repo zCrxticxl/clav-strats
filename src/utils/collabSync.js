@@ -13,7 +13,7 @@ export function yMapKeys(yMap) {
  *
  * Deletion is the subtle part. Naively removing every key that is missing from
  * the local list treats "my list" as the whole truth, which destroys entries a
- * peer added between our last pull and this push — exactly what happens when
+ * peer added between our last pull and this push, which happens when
  * two people draw at the same time.
  *
  * So a key is only deleted when this client previously observed it (through its

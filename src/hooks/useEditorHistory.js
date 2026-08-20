@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
- * useEditorHistory — manages a piece of state with full undo/redo support.
+ * useEditorHistory manages a piece of state with full undo/redo support.
  *
  *   const [elements, setElements, { undo, redo, canUndo, canRedo, reset }] = useEditorHistory([]);
  *
@@ -10,11 +10,15 @@ import { useState, useRef, useCallback, useEffect } from 'react';
  *    so that many small drag-events are merged into one undo step).
  *  - Holds maxSize=100 snapshots to keep memory bounded.
  *  - reset(value) replaces both current state and history (use when loading a strat).
+ *  - History/redo bookkeeping is kept in refs and mutated in the handler body (NOT
+ *    inside a setState updater) so React StrictMode's double-invocation of updaters
+ *    cannot push duplicate snapshots and corrupt the undo stack.
  */
 export function useEditorHistory(initial = []) {
   const [state, setStateInternal] = useState(initial);
-  const historyRef = useRef([]);    // past snapshots (oldest → newest)
-  const futureRef  = useRef([]);    // redo stack
+  const stateRef    = useRef(initial);   // always-current mirror of `state`
+  const historyRef  = useRef([]);        // past snapshots (oldest → newest)
+  const futureRef   = useRef([]);        // redo stack
   const lastGroupRef = useRef(null);
   const lastGroupTime = useRef(0);
   const maxSize = 100;
@@ -24,44 +28,44 @@ export function useEditorHistory(initial = []) {
 
   // setState replacement: accepts (next | (prev) => next, opts?: { groupKey?: string })
   const setState = useCallback((updater, opts) => {
-    setStateInternal(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      if (next === prev) return prev;
-      const now = Date.now();
-      const sameGroup = opts?.groupKey
-        && opts.groupKey === lastGroupRef.current
-        && (now - lastGroupTime.current) < 600;
-      if (!sameGroup) {
-        historyRef.current.push(prev);
-        if (historyRef.current.length > maxSize) historyRef.current.shift();
-      }
-      lastGroupRef.current = opts?.groupKey || null;
-      lastGroupTime.current = now;
-      futureRef.current = [];
-      return next;
-    });
+    const prev = stateRef.current;
+    const next = typeof updater === 'function' ? updater(prev) : updater;
+    if (next === prev) return;
+    const now = Date.now();
+    const sameGroup = opts?.groupKey
+      && opts.groupKey === lastGroupRef.current
+      && (now - lastGroupTime.current) < 600;
+    if (!sameGroup) {
+      historyRef.current.push(prev);
+      if (historyRef.current.length > maxSize) historyRef.current.shift();
+    }
+    lastGroupRef.current = opts?.groupKey || null;
+    lastGroupTime.current = now;
+    futureRef.current = [];
+    stateRef.current = next;
+    setStateInternal(next);
     bump();
   }, [bump]);
 
   const undo = useCallback(() => {
-    setStateInternal(curr => {
-      if (historyRef.current.length === 0) return curr;
-      const prev = historyRef.current.pop();
-      futureRef.current.push(curr);
-      lastGroupRef.current = null;
-      return prev ?? curr;
-    });
+    if (historyRef.current.length === 0) return;
+    const curr = stateRef.current;
+    const prev = historyRef.current.pop();
+    futureRef.current.push(curr);
+    lastGroupRef.current = null;
+    stateRef.current = prev ?? curr;
+    setStateInternal(prev ?? curr);
     bump();
   }, [bump]);
 
   const redo = useCallback(() => {
-    setStateInternal(curr => {
-      if (futureRef.current.length === 0) return curr;
-      const next = futureRef.current.pop();
-      historyRef.current.push(curr);
-      lastGroupRef.current = null;
-      return next ?? curr;
-    });
+    if (futureRef.current.length === 0) return;
+    const curr = stateRef.current;
+    const next = futureRef.current.pop();
+    historyRef.current.push(curr);
+    lastGroupRef.current = null;
+    stateRef.current = next ?? curr;
+    setStateInternal(next ?? curr);
     bump();
   }, [bump]);
 
@@ -70,18 +74,22 @@ export function useEditorHistory(initial = []) {
     historyRef.current = [];
     futureRef.current  = [];
     lastGroupRef.current = null;
+    stateRef.current = value;
     setStateInternal(value);
     bump();
   }, [bump]);
 
   // Apply an external (remote/collab) state without pushing to history and
-  // without clearing the local undo stack — keeps undo usable during collab.
+  // without clearing the local undo stack, so undo remains usable during collab.
   const applyRemote = useCallback((updater) => {
-    setStateInternal(prev => (typeof updater === 'function' ? updater(prev) : updater));
+    const prev = stateRef.current;
+    const next = typeof updater === 'function' ? updater(prev) : updater;
+    stateRef.current = next;
+    setStateInternal(next);
     bump();
   }, [bump]);
 
-  // suppress unused warning — tick is only read to trigger re-renders
+  // suppress unused warning. tick is only read to trigger re-renders
   void tick;
 
   // Global shortcuts: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z or Ctrl+Y = redo

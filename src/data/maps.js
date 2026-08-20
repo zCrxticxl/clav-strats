@@ -2,7 +2,7 @@
 // Blueprints live in /public/blueprints/ as .webp files. Only maps that
 // actually have files are exposed; otherwise the editor would show empty
 // canvases. As you add more files, drop them in /public/blueprints/ and
-// extend MAP_BLUEPRINTS below — the floor names below MUST match the keys
+// Extend MAP_BLUEPRINTS below. Floor names MUST match the keys
 // in MAP_BLUEPRINTS for the blueprint to load.
 
 export const COMPETITIVE_MAPS = [

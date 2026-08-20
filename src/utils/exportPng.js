@@ -1,6 +1,7 @@
 import { ATTACHED_GADGET_GAP, ATTACHED_GADGET_SIZE } from './gadgetPlacement';
+import { getActivePhase } from './timeline';
 
-// PNG export — all canvas-drawn images use crossOrigin='anonymous' and their
+// PNG export. Canvas-drawn images use crossOrigin='anonymous' and their
 // hosts send Access-Control-Allow-Origin, so the canvas stays untainted even
 // with Electron webSecurity enabled.
 
@@ -82,7 +83,7 @@ export function buildFloorSVG(W, H, elements) {
       const eh = (el.h != null ? el.h : (el.horizontal ? 0.65 : 3.0)) * s;
       const px = el.x - ew/2, py = el.y - eh/2;
       const pid = `rp-${key}`;
-      return `<defs>
+       return `<defs>
         <pattern id="${pid}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <rect width="6" height="6" fill="${c}"/>
           <rect width="3" height="6" fill="rgba(0,0,0,0.55)"/>
@@ -90,7 +91,7 @@ export function buildFloorSVG(W, H, elements) {
       </defs>
       <rect x="${px}%" y="${py}%" width="${ew}%" height="${eh}%" fill="url(#${pid})" stroke="${c}" stroke-width="1.5" rx="0.5"/>
       <rect x="${px}%" y="${py}%" width="${ew}%" height="${eh}%" fill="${c}55" rx="0.5"/>
-      <text x="${el.x}%" y="${el.y + 0.35}%" text-anchor="middle" dominant-baseline="middle" font-size="${Math.round(W*0.020)}" fill="${c}" font-weight="bold" font-family="Arial,sans-serif" stroke="rgba(0,0,0,0.8)" stroke-width="2" paint-order="stroke">R</text>`;
+       <text x="${el.x}%" y="${el.y + 0.35}%" text-anchor="middle" dominant-baseline="middle" font-size="${Math.round(W*0.014)}" fill="${c}" font-weight="bold" font-family="Arial,sans-serif" stroke="rgba(0,0,0,0.8)" stroke-width="2" paint-order="stroke">R</text>`;
     }
     if (el.type === 'barricade') {
       const s  = el.scale || 1;
@@ -189,9 +190,10 @@ export function buildFloorSVG(W, H, elements) {
 
 
 async function exportRootToCanvas(rootEl, scale = 2, meta = {}) {
-  const rect = rootEl.getBoundingClientRect();
-  const W = Math.max(1, Math.round(rect.width));
-  const H = Math.max(1, Math.round(rect.height));
+  // Ignore the editor zoom transform: export is a document render, not a
+  // screenshot of the currently selected viewport.
+  const W = Math.max(1, Math.round(rootEl.offsetWidth || rootEl.getBoundingClientRect().width));
+  const H = Math.max(1, Math.round(rootEl.offsetHeight || rootEl.getBoundingClientRect().height));
 
   const canvas = document.createElement('canvas');
   canvas.width  = W * scale;
@@ -200,53 +202,36 @@ async function exportRootToCanvas(rootEl, scale = 2, meta = {}) {
   ctx.fillStyle = '#0D1117';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const isOtherFloor = !!meta.overrideBlueprintSrc;
-
-  // Blueprint: use override for other floors, DOM img for current
-  const bpSrc = isOtherFloor
-    ? meta.overrideBlueprintSrc
-    : rootEl.querySelector('img')?.src;
+  const bpSrc = meta.overrideBlueprintSrc || rootEl.querySelector('img')?.src;
 
   if (bpSrc) {
     const bpImg = await loadImg(bpSrc);
     if (bpImg) ctx.drawImage(bpImg, 0, 0, canvas.width, canvas.height);
   }
 
-  // SVG overlay
-  let svgXml = null;
-  if (isOtherFloor && meta.overrideFloorElements) {
-    const rawSvg = buildFloorSVG(W, H, meta.overrideFloorElements);
-    const parser = new DOMParser();
-    const svgDoc = parser.parseFromString(rawSvg, 'image/svg+xml');
-    const svgEl = svgDoc.documentElement;
-    await inlineSvgImages(svgEl);
-    svgXml = new XMLSerializer().serializeToString(svgEl);
-  } else {
-    const svgEl = rootEl.querySelector('svg');
-    if (svgEl) {
-      const clone = svgEl.cloneNode(true);
-      clone.setAttribute('width', W);
-      clone.setAttribute('height', H);
-      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
-      // Remove foreignObject elements (operators) — they're drawn directly on canvas below
-      clone.querySelectorAll('foreignObject').forEach(fo => fo.remove());
-      await inlineSvgImages(clone);
-      svgXml = new XMLSerializer().serializeToString(clone);
-    }
-  }
+  // Always use the pure renderer. Serializing the live SVG made active slides
+  // differ from inactive slides through selection and editor-only overlays.
+  const rawElements = meta.visibleElements || meta.overrideFloorElements || [];
+  const owners = new Map((meta.lineup || []).map(player => [player.slotId, player]));
+  const exportElements = rawElements.map(element => {
+    const owner = owners.get(element.ownerId);
+    return owner ? { ...element, color: owner.color } : element;
+  });
+  const rawSvg = buildFloorSVG(W, H, exportElements);
+  const parser = new DOMParser();
+  const svgDoc = parser.parseFromString(rawSvg, 'image/svg+xml');
+  const svgEl = svgDoc.documentElement;
+  await inlineSvgImages(svgEl);
+  const svgXml = new XMLSerializer().serializeToString(svgEl);
 
-  if (svgXml) {
-    const svgDataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgXml);
-    const svgImg = new Image();
-    svgImg.width = W; svgImg.height = H;
-    await new Promise((res, rej) => { svgImg.onload = res; svgImg.onerror = rej; svgImg.src = svgDataUrl; });
-    ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
-  }
+  const svgDataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgXml);
+  const svgImg = new Image();
+  svgImg.width = W; svgImg.height = H;
+  await new Promise((res, rej) => { svgImg.onload = res; svgImg.onerror = rej; svgImg.src = svgDataUrl; });
+  ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
 
-  // Draw operators on top — foreignObject HTML doesn't render in canvas SVG serialization
-  const opEls = isOtherFloor ? meta.overrideFloorElements : meta.visibleElements;
-  await drawOperatorsOnCanvas(ctx, opEls, W, H, scale);
+  // Draw operators on top. foreignObject HTML does not render in serialized SVG.
+  await drawOperatorsOnCanvas(ctx, exportElements, W, H, scale);
 
   return canvas;
 }
@@ -272,18 +257,18 @@ function clip(text, ctx, maxW) {
 }
 
 function lineupPanelHeight(scale) {
-  return Math.round((72 + 20 + 8 * 3) * scale);
+  return Math.round((32 + 148 + 8 * 3) * scale);
 }
 
-async function drawLineupPanel(ctx, lineup, { canvasW, mapH, scale, stratName, selectedFloor, side }) {
+async function drawLineupPanel(ctx, lineup, { canvasW, mapH, scale, stratName, selectedFloor, side, reinforcementCounts = {} }) {
   const S     = scale;
   const pH    = lineupPanelHeight(S);
   const cols  = lineup.length || 1;
   const GAP   = 6 * S;
   const PAD   = 8 * S;
   const cardW = (canvasW - PAD * 2 - GAP * (cols - 1)) / cols;
-  const cardH = 72 * S;
-  const metaH = 20 * S;
+  const cardH = 148 * S;
+  const metaH = 26 * S;
 
   ctx.fillStyle = '#08090D';
   ctx.fillRect(0, mapH, canvasW, pH);
@@ -305,7 +290,7 @@ async function drawLineupPanel(ctx, lineup, { canvasW, mapH, scale, stratName, s
     const p      = lineup[i];
     const cx     = PAD + i * (cardW + GAP);
     const cy     = cardsY;
-    const iconSz = cardH - 8 * S;
+    const iconSz = 96 * S;
 
     ctx.fillStyle = p.color + '1A';
     roundRect(ctx, cx, cy, cardW, cardH, 5 * S); ctx.fill();
@@ -331,28 +316,47 @@ async function drawLineupPanel(ctx, lineup, { canvasW, mapH, scale, stratName, s
     const tx = iconX + iconSz + 7 * S;
     const tw = cardW - iconSz - 20 * S;
 
-    ctx.fillStyle = '#E8EDF2'; ctx.font = `bold ${9*S}px monospace`;
+    ctx.fillStyle = '#E8EDF2'; ctx.font = `bold ${17*S}px monospace`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(clip(p.name || `P${i+1}`, ctx, tw), tx, cy + 6*S);
-    ctx.fillStyle = p.color; ctx.font = `${8*S}px monospace`;
-    ctx.fillText(clip(p.operator?.name || '—', ctx, tw), tx, cy + 18*S);
+    const playerName = clip(`${p.name || `P${i+1}`}  W:${reinforcementCounts[p.slotId] || 0}`, ctx, tw);
+    ctx.strokeStyle = '#08090D'; ctx.lineWidth = 4*S; ctx.lineJoin = 'round';
+    ctx.strokeText(playerName, tx, cy + 9*S);
+    ctx.fillText(playerName, tx, cy + 9*S);
+    ctx.fillStyle = p.color; ctx.font = `bold ${14*S}px monospace`;
+    const operatorName = clip(p.operator?.name || '-', ctx, tw);
+    ctx.strokeText(operatorName, tx, cy + 38*S);
+    ctx.fillText(operatorName, tx, cy + 38*S);
     if (p.role) {
-      ctx.fillStyle = '#8A9BB0'; ctx.font = `${7*S}px monospace`;
-      ctx.fillText(p.role, tx, cy + 29*S);
+      ctx.fillStyle = '#8A9BB0'; ctx.font = `${10*S}px monospace`;
+      ctx.fillText(clip(p.role, ctx, tw), tx, cy + 64*S);
+    }
+    if (p.backups?.length) {
+      ctx.fillStyle = '#E8B84B'; ctx.font = `bold ${12*S}px monospace`;
+      const backupNames = clip(`★ ${p.backups.map(backup => backup.name).join(', ')}`, ctx, tw);
+      ctx.fillText(backupNames, tx, cy + 82*S);
     }
 
-    let gx = tx;
-    for (const gadget of [p.gadget, p.secondaryGadget].filter(Boolean)) {
+    let gx = cx + 8*S;
+    const gadgetY = cy + 104*S;
+    for (const gadget of [p.gadget || p.operator?.gadget, p.secondaryGadget].filter(Boolean)) {
       if (gadget?.icon) {
         const gImg = await loadImg(gadget.icon);
-        if (gImg) { ctx.drawImage(gImg, gx, cy + cardH - 18*S - 4*S, 16*S, 16*S); gx += 20*S; }
+        if (gImg) {
+          const gadgetSize = 34*S;
+          ctx.fillStyle = '#08090D';
+          roundRect(ctx, gx, gadgetY, gadgetSize, gadgetSize, 4*S); ctx.fill();
+          ctx.strokeStyle = p.color + 'AA'; ctx.lineWidth = 1.5*S;
+          roundRect(ctx, gx, gadgetY, gadgetSize, gadgetSize, 4*S); ctx.stroke();
+          ctx.drawImage(gImg, gx + 3*S, gadgetY + 3*S, gadgetSize - 6*S, gadgetSize - 6*S);
+          gx += gadgetSize + 8*S;
+        }
       }
     }
   }
   ctx.textAlign = 'left';
 }
 
-export async function exportStratAsPNG(rootEl, filename = 'strat', meta = {}) {
+export async function renderStratAsPNG(rootEl, meta = {}) {
   if (!rootEl) throw new Error('No root element');
 
   const { lineup = [], stratName = '', selectedFloor = '', side = 'attack' } = meta;
@@ -369,14 +373,180 @@ export async function exportStratAsPNG(rootEl, filename = 'strat', meta = {}) {
   ctx.drawImage(mapCanvas, 0, 0);
 
   if (lineup.length > 0) {
-    await drawLineupPanel(ctx, lineup, { canvasW: cw, mapH: ch, scale, stratName, selectedFloor, side });
+    await drawLineupPanel(ctx, lineup, { canvasW: cw, mapH: ch, scale, stratName, selectedFloor, side, reinforcementCounts: meta.reinforcementCounts });
   }
 
-  final.toBlob(blob => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${filename}.png`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  }, 'image/png');
+  return final;
+}
+
+export async function exportStratAsPNG(rootEl, filename = 'strat', meta = {}) {
+  const final = await renderStratAsPNG(rootEl, meta);
+  const blob = await new Promise(resolve => final.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('PNG encoding failed');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${filename}.png`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return final;
+}
+
+async function drawTimelinePlayers(ctx, positions, width, height, scale, iconCache) {
+  for (const position of positions) {
+    const player = position.player;
+    const operator = player?.operator;
+    if (!player || !operator) continue;
+    const cx = pct(position.x, width * scale);
+    const cy = pct(position.y, height * scale);
+    const size = 36 * scale;
+    const radius = size / 2;
+    const color = player.color || '#E8B84B';
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + 4 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(8,10,14,0.82)';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5 * scale;
+    ctx.stroke();
+    ctx.clip();
+    const icon = iconCache.get(operator.icon);
+    if (icon) ctx.drawImage(icon, cx - radius, cy - radius, size, size);
+    ctx.restore();
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function prepareTimelineRender(rootEl, timeline, meta) {
+  const base = await exportRootToCanvas(rootEl, 2, meta);
+  const iconCache = new Map();
+  const operators = (meta.lineup || []).map(player => player.operator).filter(Boolean);
+  await Promise.all([...new Set(operators.map(operator => operator.icon))].map(async src => {
+    const image = await loadImg(src);
+    if (image) iconCache.set(src, image);
+  }));
+  return { base, iconCache, duration: Math.max(1, Number(timeline?.duration) || 1) };
+}
+
+async function drawTimelineFrame(base, time, duration, timeline, positionsAtTime, iconCache) {
+  const canvas = document.createElement('canvas');
+  canvas.width = base.width;
+  canvas.height = base.height + 48;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#08090D';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(base, 0, 0);
+  ctx.fillStyle = '#141B24';
+  ctx.fillRect(0, base.height, canvas.width, 48);
+  ctx.fillStyle = '#E8B84B';
+  ctx.fillRect(0, base.height, canvas.width * Math.min(1, time / duration), 3);
+  ctx.fillStyle = '#E8EDF2';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText(`${time.toFixed(1)}s / ${duration.toFixed(1)}s`, 18, base.height + 32);
+  const phase = getActivePhase(timeline, time);
+  if (phase) { ctx.fillStyle = phase.color || '#E8B84B'; ctx.fillText(phase.name, 270, base.height + 32); }
+  await drawTimelinePlayers(ctx, positionsAtTime(time), base.width / 2, base.height / 2, 2, iconCache);
+  return canvas;
+}
+
+export async function exportTimelineAsGIF(rootEl, filename, timeline, meta, positionsAtTime) {
+  const gifModule = await import('gif.js');
+  const GIF = gifModule.default || gifModule;
+  const { base, iconCache, duration } = await prepareTimelineRender(rootEl, timeline, meta);
+  const frameCount = Math.min(300, Math.max(2, Math.ceil(duration * 5)));
+  const delay = Math.max(100, Math.round((duration * 1000) / frameCount));
+  const gif = new GIF({
+    workers: 2,
+    quality: 10,
+    repeat: 0,
+    width: base.width,
+    height: base.height + 48,
+    workerScript: `${process.env.PUBLIC_URL || ''}/gif.worker.js`,
+  });
+
+  for (let index = 0; index < frameCount; index += 1) {
+    const time = duration * (index / (frameCount - 1));
+    const frame = await drawTimelineFrame(base, time, duration, timeline, positionsAtTime, iconCache);
+    gif.addFrame(frame, { copy: true, delay });
+  }
+
+  return new Promise((resolve, reject) => {
+    gif.on('finished', blob => {
+      downloadBlob(blob, `${filename}.gif`);
+      resolve(blob);
+    });
+    gif.on('error', reject);
+    gif.render();
+  });
+}
+
+export async function exportTimelineAsWebM(rootEl, filename, timeline, meta, positionsAtTime) {
+  if (typeof MediaRecorder === 'undefined' || typeof HTMLCanvasElement.prototype.captureStream !== 'function') {
+    throw new Error('WebM export is not supported in this webview');
+  }
+  const { base, iconCache, duration } = await prepareTimelineRender(rootEl, timeline, meta);
+  const canvas = document.createElement('canvas');
+  canvas.width = base.width;
+  canvas.height = base.height + 48;
+  const ctx = canvas.getContext('2d');
+  const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(type => MediaRecorder.isTypeSupported(type));
+  if (!mimeType) throw new Error('No supported WebM codec');
+
+  const stream = canvas.captureStream(30);
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const chunks = [];
+  let interval = null;
+  let startedAt = 0;
+  const drawFrame = time => {
+    ctx.fillStyle = '#08090D';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(base, 0, 0);
+    ctx.fillStyle = '#141B24';
+    ctx.fillRect(0, base.height, canvas.width, 48);
+    ctx.fillStyle = '#E8B84B';
+    ctx.fillRect(0, base.height, canvas.width * Math.min(1, time / duration), 3);
+    ctx.fillStyle = '#E8EDF2';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText(`${time.toFixed(1)}s / ${duration.toFixed(1)}s`, 18, base.height + 32);
+      const phase = getActivePhase(timeline, time);
+      if (phase) { ctx.fillStyle = phase.color || '#E8B84B'; ctx.fillText(phase.name, 270, base.height + 32); }
+  };
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { if (interval) clearInterval(interval); stream.getTracks().forEach(track => track.stop()); };
+    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+    recorder.onerror = event => { cleanup(); reject(event.error || new Error('MediaRecorder failed')); };
+    recorder.onstop = () => {
+      cleanup();
+      const blob = new Blob(chunks, { type: mimeType });
+      downloadBlob(blob, `${filename}.webm`);
+      resolve(blob);
+    };
+    const render = () => {
+      const time = Math.min(duration, (performance.now() - startedAt) / 1000);
+      drawFrame(time);
+      // The player layer is rendered after the base map so movement never
+      // mutates or serializes the editor's static strategy state.
+      drawTimelinePlayers(ctx, positionsAtTime(time), base.width / 2, base.height / 2, 2, iconCache);
+      if (time >= duration) {
+        recorder.stop();
+        return;
+      }
+    };
+    startedAt = performance.now();
+    recorder.start(100);
+    render();
+    interval = setInterval(render, 33);
+  });
 }

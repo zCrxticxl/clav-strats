@@ -1,16 +1,22 @@
 use futures_util::StreamExt;
 use serde::Serialize;
+#[cfg(target_os = "windows")]
+use std::fs;
 use std::{
     collections::HashMap,
-    fs,
     io::{BufRead, BufReader, Read},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, State};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+use tauri::{AppHandle, State};
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
 use warp::{
@@ -24,10 +30,37 @@ use yrs_warp::{
     AwarenessRef,
 };
 
+#[cfg(target_os = "windows")]
 const CLOUDFLARED_WINDOWS_URL: &str =
     "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe";
 
-type Rooms = Arc<Mutex<HashMap<String, Arc<BroadcastGroup>>>>;
+// One entry per live room: the broadcast group (holding the shared Yjs doc +
+// awareness) plus a count of currently-connected peers so empty rooms can be
+// released instead of accumulating forever.
+struct RoomEntry {
+    group: Arc<BroadcastGroup>,
+    active: Arc<AtomicUsize>,
+}
+
+type Rooms = Arc<Mutex<HashMap<String, Arc<RoomEntry>>>>;
+
+// Bound how many rooms the embedded server will host at once. Room ids are
+// random tokens minted by the app, so an anonymous peer who learns the tunnel
+// hostname cannot grow the host's memory without limit.
+const MAX_ROOMS: usize = 64;
+const ROOM_LENGTH_LIMIT: usize = 64;
+
+#[derive(Debug)]
+struct RoomLimitExceeded;
+impl warp::reject::Reject for RoomLimitExceeded {}
+
+fn is_valid_room(room: &str) -> bool {
+    !room.is_empty()
+        && room.len() <= ROOM_LENGTH_LIMIT
+        && room
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 
 #[derive(Default)]
 pub struct CollabHostState {
@@ -144,10 +177,12 @@ impl CollabHostState {
 
         // A Quick Tunnel can lose its public hostname while the local Yjs server
         // is still healthy. Only replace cloudflared here so every shared Yjs
-        // room and document stays alive across tunnel recovery.
-        terminate_child(&mut existing.tunnel);
+        // room and document stays alive across tunnel recovery. Start the
+        // replacement first: a failed start must never leave the runtime holding
+        // a killed tunnel that still advertises a stale public URL.
         let (tunnel, public_http_url) =
             start_quick_tunnel(&existing.tunnel_executable, existing.local_port).await?;
+        terminate_child(&mut existing.tunnel);
         existing.server_url = public_http_url.replacen("https://", "wss://", 1);
         existing.tunnel = tunnel;
 
@@ -241,26 +276,55 @@ fn with_rooms(
 }
 
 async fn websocket_handler(room: String, ws: Ws, rooms: Rooms) -> Result<impl Reply, Rejection> {
-    let group = {
+    if !is_valid_room(&room) {
+        return Err(warp::reject::not_found());
+    }
+    let entry = {
         let mut rooms = rooms.lock().await;
-        if let Some(group) = rooms.get(&room) {
-            group.clone()
+        if let Some(entry) = rooms.get(&room) {
+            entry.clone()
         } else {
+            if rooms.len() >= MAX_ROOMS {
+                return Err(warp::reject::custom(RoomLimitExceeded));
+            }
             let awareness: AwarenessRef = Arc::new(Awareness::new(Doc::new()));
             let group = Arc::new(BroadcastGroup::new(awareness, 64).await);
-            rooms.insert(room, group.clone());
-            group
+            let entry = Arc::new(RoomEntry {
+                group,
+                active: Arc::new(AtomicUsize::new(0)),
+            });
+            rooms.insert(room.clone(), entry.clone());
+            entry
         }
     };
-    Ok(ws.on_upgrade(move |socket| websocket_peer(socket, group)))
+    Ok(ws.on_upgrade(move |socket| websocket_peer(socket, entry, rooms, room)))
 }
 
-async fn websocket_peer(socket: WebSocket, group: Arc<BroadcastGroup>) {
+async fn websocket_peer(socket: WebSocket, entry: Arc<RoomEntry>, rooms: Rooms, room: String) {
+    {
+        let mut rooms = rooms.lock().await;
+        entry.active.fetch_add(1, Ordering::SeqCst);
+        // Re-register in case a concurrent last-leaver removed this room while the
+        // connection was still being established, so the shared doc stays alive.
+        rooms.entry(room.clone()).or_insert_with(|| entry.clone());
+    }
     let (sink, stream) = socket.split();
     let sink = Arc::new(Mutex::new(WarpSink::from(sink)));
     let stream = WarpStream::from(stream);
-    let subscription = group.subscribe(sink, stream);
+    let subscription = entry.group.subscribe(sink, stream);
     let _ = subscription.completed().await;
+
+    // Last peer disconnected -> drop the room so its doc + awareness are freed.
+    let mut rooms = rooms.lock().await;
+    if entry.active.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if rooms
+            .get(&room)
+            .map(|registered| Arc::ptr_eq(registered, &entry))
+            .unwrap_or(false)
+        {
+            rooms.remove(&room);
+        }
+    }
 }
 
 async fn resolve_cloudflared(app: &AppHandle) -> Result<PathBuf, String> {
@@ -310,6 +374,7 @@ fn cloudflared_works(executable: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "windows")]
 async fn download_cloudflared(destination: &Path) -> Result<(), String> {
     let response = reqwest::Client::new()
         .get(CLOUDFLARED_WINDOWS_URL)
@@ -560,23 +625,38 @@ fn extract_quick_tunnel_url(line: &str) -> Option<String> {
 }
 
 fn hidden_command(executable: &Path) -> Command {
-    let mut command = Command::new(executable);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut command = Command::new(executable);
         command.creation_flags(CREATE_NO_WINDOW);
+        command
     }
-    command
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(executable)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        cloudflared_works, extract_quick_tunnel_url, hidden_command, start_local_server,
-        start_quick_tunnel,
+        cloudflared_works, extract_quick_tunnel_url, hidden_command, is_valid_room,
+        start_local_server, start_quick_tunnel, ROOM_LENGTH_LIMIT,
     };
     use std::path::Path;
+
+    #[test]
+    fn validates_room_names() {
+        assert!(is_valid_room("clav-strat-abc123"));
+        assert!(is_valid_room("room_name-9"));
+        assert!(!is_valid_room(""));
+        assert!(!is_valid_room("has/slash"));
+        assert!(!is_valid_room("has space"));
+        assert!(!is_valid_room("has..dots"));
+        assert!(!is_valid_room(&"a".repeat(ROOM_LENGTH_LIMIT + 1)));
+    }
 
     fn run_yjs_smoke(server: &str) -> std::process::Output {
         let script = r#"

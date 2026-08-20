@@ -19,7 +19,7 @@ const STEPS = [
   {
     title: 'Lineup',
     icon: '👥',
-    text: 'The lineup bar at the bottom shows your team. Click a player to select them — everything you place after will use their color. Double-click to edit their operator and gadgets.',
+    text: 'The lineup bar at the bottom shows your team. Click a player to select them. New elements use that player color. Use the Edit button to change their operator and gadgets.',
   },
   {
     title: 'Lineup Creator',

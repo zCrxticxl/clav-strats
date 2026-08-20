@@ -45,4 +45,14 @@ describe('useEditorHistory', () => {
     expect(history[0]).toEqual([{ id: 'remote' }]);
     expect(history[2].canUndo).toBe(false);
   });
+
+  test('groups rapid updates sharing a groupKey into a single undo step', () => {
+    act(() => history[1](prev => [...prev, { id: 'a' }], { groupKey: 'drag' }));
+    act(() => history[1](prev => [...prev, { id: 'b' }], { groupKey: 'drag' }));
+    expect(history[0]).toEqual([{ id: 'a' }, { id: 'b' }]);
+
+    act(() => history[2].undo());
+    expect(history[0]).toEqual([]);
+    expect(history[2].canUndo).toBe(false);
+  });
 });

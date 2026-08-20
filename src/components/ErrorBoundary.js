@@ -47,7 +47,7 @@ export class ErrorBoundary extends React.Component {
         <div style={{ fontSize: 20, fontWeight: 700, color: '#E8B84B' }}>Something went wrong</div>
         <div style={{ fontSize: 13, color: '#8A9BB0', maxWidth: 460 }}>
           The app hit an error and stopped rendering. Reload to try again. If it keeps
-          happening, your saved data may be corrupt — you can back it up and reset.
+          happening, your saved data may be corrupt. You can back it up and reset.
         </div>
         <pre style={{ fontSize: 11, color: '#E84B4B', maxWidth: 520, overflow: 'auto', maxHeight: 120 }}>
           {String(this.state.error?.message || this.state.error)}

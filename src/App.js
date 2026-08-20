@@ -1,11 +1,12 @@
 import React from 'react';
-import { HashRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import Tutorial from './components/Tutorial';
 import HomePage from './pages/HomePage';
 import LibraryPage from './pages/LibraryPage';
 import EditorPage from './pages/EditorPage';
 import LineupPage from './pages/LineupPage';
 import WallEditorPage from './pages/WallEditorPage';
+import MapLearnPage from './pages/MapLearnPage';
 import { useTauriUpdater } from './hooks/useTauriUpdater';
 import './App.css';
 
@@ -23,7 +24,8 @@ function NavBar() {
       <div className="navbar-links">
         <Link to="/" className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}>Home</Link>
         <Link to="/library" className={`nav-link ${isActive('/library') ? 'active' : ''}`}>Library</Link>
-        <Link to="/lineup" className={`nav-link ${isActive('/lineup') ? 'active' : ''}`}>Lineup</Link>
+          <Link to="/lineup" className={`nav-link ${isActive('/lineup') ? 'active' : ''}`}>Lineup</Link>
+          <Link to="/map-learn" className={`nav-link ${isActive('/map-learn') ? 'active' : ''}`}>Map Learn</Link>
         <Link to="/wall-editor" className={`nav-link ${isActive('/wall-editor') ? 'active' : ''}`} style={{ fontSize: 11, opacity: 0.5 }}>Wall Editor</Link>
         <Link to="/editor" className="nav-link">
           <span className="nav-cta">+ New Strat</span>
@@ -44,9 +46,11 @@ export default function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/lineup" element={<LineupPage />} />
+            <Route path="/map-learn" element={<MapLearnPage />} />
             <Route path="/wall-editor" element={<WallEditorPage />} />
             <Route path="/editor" element={<EditorPage />} />
             <Route path="/editor/:stratId" element={<EditorPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
         <Tutorial />

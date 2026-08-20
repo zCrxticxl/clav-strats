@@ -67,7 +67,7 @@ export const DEFENDERS = [
   { id: 'mozzie',       name: 'Mozzie',      role: 'Intel',         icon: ICON('mozzie'),       gadget: GADGETS.mozzie_pest,      secondaries: sec('nitro_cell','barbed_wire') },
   { id: 'warden',       name: 'Warden',      role: 'Support',       icon: ICON('warden'),       gadget: null,                     secondaries: sec('nitro_cell','deploy_shield') },
   { id: 'goyo',         name: 'Goyo',        role: 'Trap',          icon: ICON('goyo'),         gadget: GADGETS.goyo_volcan,      secondaries: sec('nitro_cell','proximity_mine') },
-  { id: 'wamai',        name: 'Wamai',       role: 'Intel Denial',  icon: ICON('wamai'),        gadget: GADGETS.wamai_magnet,     secondaries: sec('impact_grenade','proximity_mine') },
+  { id: 'wamai',        name: 'Wamai',       role: 'Intel Denial',  icon: ICON('wamai'),        gadget: GADGETS.wamai_magnet,     secondaries: sec('proximity_mine','nitro_cell','deploy_shield') },
   { id: 'oryx',         name: 'Oryx',        role: 'Roam',          icon: ICON('oryx'),         gadget: null,                     secondaries: sec('barbed_wire','proximity_mine') },
   { id: 'melusi',       name: 'Melusi',      role: 'Intel/Trap',    icon: ICON('melusi'),       gadget: GADGETS.melusi_banshee,   secondaries: sec('nitro_cell','impact_grenade') },
   { id: 'aruni',        name: 'Aruni',       role: 'Intel Denial',  icon: ICON('aruni'),        gadget: GADGETS.aruni_gate,       secondaries: sec('barbed_wire','bp_camera') },

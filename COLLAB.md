@@ -49,6 +49,7 @@ Shared Yjs maps:
 
 - `elements`: strategy canvas elements keyed by element id;
 - `lineups`: lineups keyed by map/side context;
+- `timeline`: one persisted logical movement timeline for the strategy;
 - `meta`: strategy name, side, floor, map, description, and tags;
 - awareness: names, cursors, selected tool, and online presence.
 
@@ -87,6 +88,8 @@ http://localhost:3000/#/editor?room=test-room
   online. Invitation codes should only be sent to intended teammates.
 - Room state lives in memory on the host. Each client still auto-saves its own
   local copy of the strategy.
+- Joining a room pulls the room's content into the open editor. If you already
+  have a strat open, the app asks for confirmation before replacing it.
 - The embedded server listens on loopback only; it is not directly exposed to
   the LAN or internet.
 

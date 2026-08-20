@@ -1,7 +1,7 @@
 import React from 'react';
 
 export function ToolPalette({
-  tools, activeTool, activeColor, reinforcementCount, rotateOrientation,
+  tools, activeTool, activeColor, reinforcementCount, reinforcementCounts = {}, lineup = [], rotateOrientation,
   gadgetCategory, gadgets, onSelectTool, onRotateOrientation, onGadgetCategory,
   onGadgetDragStart, onGadgetDragEnd,
 }) {
@@ -10,7 +10,11 @@ export function ToolPalette({
     <div className="tool-grid">{tools.map(tool => <button key={tool.id} className={`tool-btn ${activeTool === tool.id ? 'active' : ''}`} onClick={() => onSelectTool(tool.id)} title={tool.label}>
       <span>{tool.emoji}</span><span className="tool-btn-label">{tool.label}</span>
     </button>)}</div>
-    {activeTool === 'reinforcement' && <div style={{ marginTop:8, padding:'5px 8px', background:'var(--bg-panel)', borderRadius:4, fontFamily:'var(--font-mono)', fontSize:10, color:reinforcementCount >= 10 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>🧱 {reinforcementCount}/10 · walls/hatches only</div>}
+    {activeTool === 'reinforcement' && <div style={{ marginTop:8, padding:'7px 8px', background:'var(--bg-panel)', borderRadius:4, fontFamily:'var(--font-mono)', fontSize:10, color:reinforcementCount >= 10 ? 'var(--accent-red)' : 'var(--accent-gold)' }}>
+      <div>🧱 {reinforcementCount}/10 · {10 - reinforcementCount} remaining</div>
+      {lineup.filter(player => reinforcementCounts[player.slotId]).map(player => <div key={player.slotId} style={{ color: player.color, marginTop: 3 }}>{player.name}: {reinforcementCounts[player.slotId]}</div>)}
+      {reinforcementCounts.unassigned > 0 && <div style={{ color:'var(--text-muted)', marginTop: 3 }}>Unassigned: {reinforcementCounts.unassigned}</div>}
+    </div>}
     {activeTool === 'rotate' && <div style={{ marginTop:8, padding:'6px 8px', background:'var(--bg-panel)', borderRadius:4, display:'flex', gap:6, alignItems:'center' }}>
       <span style={{ fontFamily:'var(--font-mono)', fontSize:10, color:'var(--text-muted)' }}>Orient:</span>
       {['h', 'v'].map(orientation => <button key={orientation} onClick={() => onRotateOrientation(orientation)} style={{ flex:1, background:rotateOrientation === orientation ? activeColor + '33' : 'var(--bg-surface)', border:`1px solid ${rotateOrientation === orientation ? activeColor : 'var(--border-subtle)'}`, color:rotateOrientation === orientation ? activeColor : 'var(--text-secondary)', borderRadius:3, padding:'3px 8px', cursor:'pointer', fontFamily:'var(--font-display)', fontSize:11, fontWeight:700 }}>{orientation === 'h' ? '↔ H' : '↕ V'}</button>)}

@@ -82,5 +82,6 @@ clav-strats/
 ```
 
 ## Asset Credits
-- **Map Blueprints**: r6maps.com (community reference tool)
+- **Black Map Blueprints**: [@SternabR6](https://x.com/SternabR6)
+- **Map Reference Tool**: r6maps.com (community reference tool)
 - **Operator Icons**: github.com/marcopixel/r6operators (CC BY 4.0)

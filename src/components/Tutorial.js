@@ -52,6 +52,7 @@ export default function Tutorial() {
 
   if (!open) return (
     <button
+      className="tutorial-launcher"
       onClick={() => { setStep(0); setOpen(true); }}
       style={{
         position: 'fixed', bottom: 20, right: 20, zIndex: 8000,

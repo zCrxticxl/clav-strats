@@ -1,6 +1,6 @@
 [package]
 name = "clav-strats"
-version = "1.1.0"
+version = "1.2.0"
 description = "Clav.Strats - Rainbow Six Siege strategy builder"
 authors = ["Clav Academy"]
 edition = "2021"
